@@ -1,4 +1,4 @@
-spotify
+﻿spotify
 youtube
 ytm
 pear
@@ -6,3 +6,4 @@ applemusic
 cider
 focal
 vlc
+口ひげさん

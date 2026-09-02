@@ -112,7 +112,7 @@ constexpr double DEFAULT_VHS_TRACKING_JITTER_MIN_PX = 1.0;
 constexpr double DEFAULT_VHS_TRACKING_JITTER_MAX_PX = 4.5;
 constexpr double DEFAULT_VHS_TRACKING_BRIGHTEN = 0.00; // 0..1
 constexpr double VHS_CHROMA_MAX_SHIFT_PX = 40.0;       // full-scale (100) horizontal split for each channel
-constexpr int DEFAULT_VHS_SMEAR_AMOUNT = 10;            // 0..100
+constexpr int DEFAULT_VHS_SMEAR_AMOUNT = 10;           // 0..100
 constexpr double VHS_SMEAR_MAX_TAPS = 20.0;            // longest streak reach at 100 (doubled)
 constexpr double VHS_SMEAR_TAP_STEP_PX = 1.15;         // px between each streak tap
 constexpr double VHS_SMEAR_TAP_DECAY = 0.78;           // per-tap weight falloff
@@ -125,13 +125,13 @@ constexpr double VHS_SMEAR_PHASE_SPEED = 0.35;         // noise "time" advance p
 constexpr double VHS_SMEAR_BAND_MIN_FRAC = 0.10;       // burst band height, min fraction of card height
 constexpr double VHS_SMEAR_BAND_MAX_FRAC = 0.25;       // burst band height, max fraction of card height
 constexpr double VHS_SMEAR_BAND_MIN_PX = 20.0;         // burst band height floor, so small cards still show it
-constexpr double DEFAULT_VHS_SMEAR_BURST_MIN_S = 3.0;          // shortest plateau (full-strength) duration
-constexpr double DEFAULT_VHS_SMEAR_BURST_MAX_S = 6.0;          // longest plateau (full-strength) duration
-constexpr double VHS_SMEAR_FADE_IN_S = 0.5;               // ramp in/out duration, on top of the plateau duration
+constexpr double DEFAULT_VHS_SMEAR_BURST_MIN_S = 3.0;  // shortest plateau (full-strength) duration
+constexpr double DEFAULT_VHS_SMEAR_BURST_MAX_S = 6.0;  // longest plateau (full-strength) duration
+constexpr double VHS_SMEAR_FADE_IN_S = 0.5;            // ramp in/out duration, on top of the plateau duration
 constexpr double VHS_SMEAR_FADE_OUT_S = 0.3;
-constexpr double DEFAULT_VHS_SMEAR_MIN_INTERVAL_S = 2.0;            // shortest gap between bursts
-constexpr double DEFAULT_VHS_SMEAR_MAX_INTERVAL_S = 6.0;            // longest gap between bursts
-constexpr double VHS_SMEAR_EDGE_FEATHER_PX = 8.0;      // soft fade-in/out width at the band's top/bottom edges
+constexpr double DEFAULT_VHS_SMEAR_MIN_INTERVAL_S = 2.0; // shortest gap between bursts
+constexpr double DEFAULT_VHS_SMEAR_MAX_INTERVAL_S = 6.0; // longest gap between bursts
+constexpr double VHS_SMEAR_EDGE_FEATHER_PX = 8.0;        // soft fade-in/out width at the band's top/bottom edges
 constexpr int DEFAULT_VHS_GLITCH_CHANCE_PCT = 8;
 constexpr int DEFAULT_VHS_GLITCH_MAX_BANDS = 4;
 constexpr int DEFAULT_VHS_GRAIN_AMOUNT = 50;
@@ -325,19 +325,11 @@ void CopyHstringToUtf8(const winrt::hstring &src, char *dst, int maxLen)
 	dst[copyLen] = '\0';
 }
 
-bool IsStringInsideOtherString(const char *searchStringUtf8, const winrt::hstring &incomingStringToSearchAgainst)
+std::wstring ToLowerWide(const std::wstring &s)
 {
-	if (!searchStringUtf8) {
-		return false;
-	}
-	std::wstring stringToSearchAgainst(incomingStringToSearchAgainst.c_str());
-	std::wstring searchString = Utf8ToWide(searchStringUtf8);
-	if (searchString.empty() || stringToSearchAgainst.empty()) {
-		return false;
-	}
-
-	auto it = std::search(stringToSearchAgainst.begin(), stringToSearchAgainst.end(), searchString.begin(), searchString.end(), [](wchar_t a, wchar_t b) { return towlower(a) == towlower(b); });
-	return it != stringToSearchAgainst.end();
+	std::wstring out = s;
+	std::transform(out.begin(), out.end(), out.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
+	return out;
 }
 
 void ReadThumbnail(const GlobalSystemMediaTransportControlsSessionMediaProperties &props, NativeMediaInfo *outInfo)
@@ -365,7 +357,7 @@ void ReadThumbnail(const GlobalSystemMediaTransportControlsSessionMediaPropertie
 }
 
 // `manager` may be null if RequestAsync() hasn't succeeded yet -- poll_loop retries creating it every poll until it succeeds.
-static bool GetCurrentTrackNative(GlobalSystemMediaTransportControlsSessionManager const &manager, NativeMediaInfo *outInfo, const std::vector<const char *> &possibleMusicSystems, const std::vector<const char *> &possibleBrowserMediaSources, bool browserSourcesEnabled)
+static bool GetCurrentTrackNative(GlobalSystemMediaTransportControlsSessionManager const &manager, NativeMediaInfo *outInfo, const std::vector<std::wstring> &possibleMusicSystems, const std::vector<std::wstring> &possibleBrowserMediaSources, bool browserSourcesEnabled)
 {
 	if (outInfo == nullptr) {
 		return false;
@@ -390,32 +382,33 @@ static bool GetCurrentTrackNative(GlobalSystemMediaTransportControlsSessionManag
 		GlobalSystemMediaTransportControlsSession session = nullptr;
 		uint32_t sessionCount = sessions.Size();
 
-		for (const char *system : possibleMusicSystems) {
-			for (uint32_t i = 0; i < sessionCount; i++) {
-				GlobalSystemMediaTransportControlsSession s = sessions.GetAt(i);
-				if (IsStringInsideOtherString(system, s.SourceAppUserModelId())) {
-					session = s;
-					break;
-				}
-			}
-			if (session)
-				break;
+		struct SessionEntry {
+			GlobalSystemMediaTransportControlsSession session;
+			std::wstring lowerId;
+		};
+		std::vector<SessionEntry> entries;
+		entries.reserve(sessionCount);
+		for (uint32_t i = 0; i < sessionCount; i++) {
+			GlobalSystemMediaTransportControlsSession s = sessions.GetAt(i);
+			entries.push_back({s, ToLowerWide(std::wstring(s.SourceAppUserModelId().c_str()))});
 		}
 
-		if (browserSourcesEnabled) {
-			if (!session) {
-				for (const char *system : possibleBrowserMediaSources) {
-					for (uint32_t i = 0; i < sessionCount; i++) {
-						GlobalSystemMediaTransportControlsSession s = sessions.GetAt(i);
-						if (IsStringInsideOtherString(system, s.SourceAppUserModelId())) {
-							session = s;
-							break;
-						}
-					}
-					if (session)
-						break;
+		auto findMatch = [&](const std::vector<std::wstring> &candidatesWide) -> GlobalSystemMediaTransportControlsSession {
+			for (const std::wstring &candidate : candidatesWide) {
+				if (candidate.empty())
+					continue;
+				for (const auto &e : entries) {
+					if (e.lowerId.find(candidate) != std::wstring::npos)
+						return e.session;
 				}
 			}
+			return nullptr;
+		};
+
+		session = findMatch(possibleMusicSystems);
+
+		if (browserSourcesEnabled && !session) {
+			session = findMatch(possibleBrowserMediaSources);
 		}
 
 		if (!session) {
@@ -462,7 +455,7 @@ static bool GetCurrentTrackNative(GlobalSystemMediaTransportControlsSessionManag
 	}
 }
 
-static bool GetCurrentTrackSafe(GlobalSystemMediaTransportControlsSessionManager const &manager, NativeMediaInfo *outInfo, const std::vector<const char *> &possibleMusicSystems, const std::vector<const char *> &possibleBrowserMediaSources, bool browserSourcesEnabled)
+static bool GetCurrentTrackSafe(GlobalSystemMediaTransportControlsSessionManager const &manager, NativeMediaInfo *outInfo, const std::vector<std::wstring> &possibleMusicSystems, const std::vector<std::wstring> &possibleBrowserMediaSources, bool browserSourcesEnabled)
 {
 	__try {
 		return GetCurrentTrackNative(manager, outInfo, possibleMusicSystems, possibleBrowserMediaSources, browserSourcesEnabled);
@@ -823,8 +816,8 @@ struct spotify_source {
 
 	std::vector<std::string> musicSystemStrings;
 	std::vector<std::string> browserMediaSourceStrings;
-	std::vector<const char *> kPossibleMusicSystems;
-	std::vector<const char *> kPossibleBrowserMediaSources;
+	std::vector<std::wstring> kPossibleMusicSystems;
+	std::vector<std::wstring> kPossibleBrowserMediaSources;
 
 	std::mutex settings_mutex;
 #define X(type, name, def) type name = def;
@@ -886,9 +879,9 @@ struct spotify_source {
 	bool vhs_smear_active = false;
 	int vhs_smear_band_y = 0;
 	int vhs_smear_band_h = 0;
-	std::chrono::steady_clock::time_point vhs_smear_burst_start{}; 
-	std::chrono::steady_clock::time_point vhs_smear_plateau_end{}; 
-	std::chrono::steady_clock::time_point vhs_smear_burst_end{};   
+	std::chrono::steady_clock::time_point vhs_smear_burst_start{};
+	std::chrono::steady_clock::time_point vhs_smear_plateau_end{};
+	std::chrono::steady_clock::time_point vhs_smear_burst_end{};
 	std::chrono::steady_clock::time_point vhs_smear_next_start{};
 	int vhs_noise_offset_x = 0;
 	int vhs_noise_offset_y = 0;
@@ -1322,15 +1315,33 @@ static void DrawVhsOverlay(Graphics &g, Bitmap &card, spotify_source *ctx, Graph
 				const uint8_t *rowSrc = &src[(size_t)y * cardW * 4];
 				uint8_t *redRow = &redBlur[(size_t)y * cardW];
 				uint8_t *blueRow = &blueBlur[(size_t)y * cardW];
-				for (int x = 0; x < cardW; x++) {
-					int rSum = 0, bSum = 0, n = 0;
-					int lo = std::max(0, x - blurRadius);
-					int hi = std::min(cardW - 1, x + blurRadius);
-					for (int xx = lo; xx <= hi; xx++) {
+
+				int rSum = 0, bSum = 0, n = 0;
+				{
+					int hi0 = std::min(cardW - 1, blurRadius);
+					for (int xx = 0; xx <= hi0; xx++) {
 						const uint8_t *p = rowSrc + (size_t)xx * 4;
 						bSum += p[0];
 						rSum += p[2];
 						n++;
+					}
+					redRow[0] = (uint8_t)(rSum / n);
+					blueRow[0] = (uint8_t)(bSum / n);
+				}
+				for (int x = 1; x < cardW; x++) {
+					int newHi = x + blurRadius;
+					int oldLo = x - blurRadius - 1;
+					if (newHi <= cardW - 1) {
+						const uint8_t *p = rowSrc + (size_t)newHi * 4;
+						bSum += p[0];
+						rSum += p[2];
+						n++;
+					}
+					if (oldLo >= 0) {
+						const uint8_t *p = rowSrc + (size_t)oldLo * 4;
+						bSum -= p[0];
+						rSum -= p[2];
+						n--;
 					}
 					redRow[x] = (uint8_t)(rSum / n);
 					blueRow[x] = (uint8_t)(bSum / n);
@@ -1351,6 +1362,13 @@ static void DrawVhsOverlay(Graphics &g, Bitmap &card, spotify_source *ctx, Graph
 			double rippleAmp = (double)smearT * VHS_SMEAR_MAX_RIPPLE_PX;
 			double burstSplitPx = (double)smearT * VHS_SMEAR_BURST_SPLIT_PX;
 			double t = (double)ctx->vhs_smear_phase;
+
+			static const std::array<double, (size_t)VHS_SMEAR_MAX_TAPS + 1> tapWeights = [] {
+				std::array<double, (size_t)VHS_SMEAR_MAX_TAPS + 1> w{};
+				for (int i = 1; i <= (int)VHS_SMEAR_MAX_TAPS; i++)
+					w[i] = std::pow(VHS_SMEAR_TAP_DECAY, (double)i);
+				return w;
+			}();
 
 			auto latticeHash = [](int i, int salt) -> float {
 				uint32_t h = (uint32_t)(i * 374761393 + salt * 668265263);
@@ -1383,17 +1401,16 @@ static void DrawVhsOverlay(Graphics &g, Bitmap &card, spotify_source *ctx, Graph
 				return f * f * (3.0f - 2.0f * f);
 			};
 
-			auto sampleSmeared = [&](const std::vector<uint8_t> &plane, double baseX, int y, double dirSign, int salt, float bandF) -> uint8_t {
+			auto sampleSmeared = [&](const std::vector<uint8_t> &plane, double baseX, int y, double dirSign, double ripple, float bandF) -> uint8_t {
 				if (bandF <= 0.001f)
 					return samplePlane(plane, baseX, y);
-				double ripple = rippleAmp * ((double)chaosWave((float)y, salt) * 2.0 - 1.0) * (double)bandF;
 				uint8_t base = samplePlane(plane, baseX + ripple, y);
 				int taps = (int)std::lround(smearTaps * (double)bandF);
 				if (taps <= 0)
 					return base;
 				double sum = (double)base, wsum = 1.0;
 				for (int i = 1; i <= taps; i++) {
-					double w = std::pow(VHS_SMEAR_TAP_DECAY, (double)i);
+					double w = tapWeights[i];
 					double sampleX = baseX + ripple + dirSign * (double)i * VHS_SMEAR_TAP_STEP_PX;
 					sum += (double)samplePlane(plane, sampleX, y) * w;
 					wsum += w;
@@ -1407,13 +1424,20 @@ static void DrawVhsOverlay(Graphics &g, Bitmap &card, spotify_source *ctx, Graph
 					float bandF = smearBandFactor(y) * (float)smearEnvelope;  // spatial x temporal fade, combined
 					double rdxRow = rdxGlobal - burstSplitPx * (double)bandF; // red trails further left inside the band
 					double bdxRow = bdxGlobal + burstSplitPx * (double)bandF; // blue trails further right inside the band
+
+					double rippleBlue = 0.0, rippleRed = 0.0;
+					if (bandF > 0.001f) {
+						rippleBlue = rippleAmp * ((double)chaosWave((float)y, 11) * 2.0 - 1.0) * (double)bandF;
+						rippleRed = rippleAmp * ((double)chaosWave((float)y, 29) * 2.0 - 1.0) * (double)bandF;
+					}
+
 					uint8_t *row = dstBase + (size_t)y * bd.Stride;
 					for (int x = 0; x < cardW; x++) {
 						size_t origIdx = ((size_t)y * cardW + (size_t)x) * 4;
 						uint8_t *px = row + (size_t)x * 4;
-						px[0] = sampleSmeared(blueBlur, x + bdxRow, y, 1.0, 11, bandF);
+						px[0] = sampleSmeared(blueBlur, x + bdxRow, y, 1.0, rippleBlue, bandF);
 						px[1] = src[origIdx + 1];
-						px[2] = sampleSmeared(redBlur, x + rdxRow, y, -1.0, 29, bandF);
+						px[2] = sampleSmeared(redBlur, x + rdxRow, y, -1.0, rippleRed, bandF);
 						px[3] = src[origIdx + 3];
 					}
 				}
@@ -2629,7 +2653,7 @@ static void poll_loop(spotify_source *ctx)
 								ctx->vhs_smear_active = false;
 								ctx->vhs_smear_next_start = std::chrono::steady_clock::time_point{};
 							} else if (!ctx->vhs_smear_active) {
-								if (ctx->vhs_smear_next_start == std::chrono::steady_clock::time_point{}) {									
+								if (ctx->vhs_smear_next_start == std::chrono::steady_clock::time_point{}) {
 									std::uniform_real_distribution<double> smearGapDist(ctx->vhs_smear_min_interval_s, ctx->vhs_smear_max_interval_s);
 									ctx->vhs_smear_next_start = now + std::chrono::milliseconds((int)(smearGapDist(ctx->vhs_rng) * 1000.0));
 								} else if (now >= ctx->vhs_smear_next_start) {
@@ -2770,42 +2794,49 @@ void InitSourcesLists(spotify_source *ctx)
 {
 	std::string output;
 
+	std::vector<const char *> musicSources;
+	std::vector<const char *> browserSources;
+
 	try {
 		ctx->musicSystemStrings = LoadStringList("media-sources-music.txt");
 		ctx->browserMediaSourceStrings = LoadStringList("media-sources-browser.txt");
 
 		if (ctx->musicSystemStrings.empty()) {
-			ctx->kPossibleMusicSystems.assign(std::begin(DEFAULT_MUSIC_SYSTEMS), std::end(DEFAULT_MUSIC_SYSTEMS));
+			musicSources.assign(std::begin(DEFAULT_MUSIC_SYSTEMS), std::end(DEFAULT_MUSIC_SYSTEMS));
 			blog(LOG_WARNING, "[spotify_now_playing] possiblemusicsystems came back empty, reverting to defaults");
 		} else {
-			ctx->kPossibleMusicSystems.reserve(ctx->musicSystemStrings.size());
+			musicSources.reserve(ctx->musicSystemStrings.size());
 			for (const auto &s : ctx->musicSystemStrings) {
-				ctx->kPossibleMusicSystems.push_back(s.c_str());
+				musicSources.push_back(s.c_str());
 			}
 		}
 
 		if (ctx->browserMediaSourceStrings.empty()) {
-			ctx->kPossibleBrowserMediaSources.assign(std::begin(DEFAULT_BROWSER_SOURCES), std::end(DEFAULT_BROWSER_SOURCES));
+			browserSources.assign(std::begin(DEFAULT_BROWSER_SOURCES), std::end(DEFAULT_BROWSER_SOURCES));
 			blog(LOG_WARNING, "[spotify_now_playing] possiblebrowsers came back empty, reverting to defaults");
 		} else {
-			ctx->kPossibleBrowserMediaSources.reserve(ctx->browserMediaSourceStrings.size());
+			browserSources.reserve(ctx->browserMediaSourceStrings.size());
 			for (const auto &s : ctx->browserMediaSourceStrings) {
-				ctx->kPossibleBrowserMediaSources.push_back(s.c_str());
+				browserSources.push_back(s.c_str());
 			}
 		}
 	} catch (...) {
 		ctx->musicSystemStrings.clear();
 		ctx->browserMediaSourceStrings.clear();
-		ctx->kPossibleMusicSystems.clear();
-		ctx->kPossibleBrowserMediaSources.clear();
+		musicSources.clear();
+		browserSources.clear();
 
-		ctx->kPossibleMusicSystems.assign(std::begin(DEFAULT_MUSIC_SYSTEMS), std::end(DEFAULT_MUSIC_SYSTEMS));
-		ctx->kPossibleBrowserMediaSources.assign(std::begin(DEFAULT_BROWSER_SOURCES), std::end(DEFAULT_BROWSER_SOURCES));
+		musicSources.assign(std::begin(DEFAULT_MUSIC_SYSTEMS), std::end(DEFAULT_MUSIC_SYSTEMS));
+		browserSources.assign(std::begin(DEFAULT_BROWSER_SOURCES), std::end(DEFAULT_BROWSER_SOURCES));
 
 		blog(LOG_WARNING, "[spotify_now_playing] Unknown error reading in music or browser systems, reverting to defaults");
 	}
 
-	for (const char *system : ctx->kPossibleMusicSystems) {
+	ctx->kPossibleMusicSystems.clear();
+	ctx->kPossibleMusicSystems.reserve(musicSources.size());
+	for (const char *system : musicSources) {
+		ctx->kPossibleMusicSystems.push_back(ToLowerWide(Utf8ToWide(system)));
+
 		if (!output.empty())
 			output += ", ";
 
@@ -2818,7 +2849,11 @@ void InitSourcesLists(spotify_source *ctx)
 
 	output.clear();
 
-	for (const char *system : ctx->kPossibleBrowserMediaSources) {
+	ctx->kPossibleBrowserMediaSources.clear();
+	ctx->kPossibleBrowserMediaSources.reserve(browserSources.size());
+	for (const char *system : browserSources) {
+		ctx->kPossibleBrowserMediaSources.push_back(ToLowerWide(Utf8ToWide(system)));
+
 		if (!output.empty())
 			output += ", ";
 
@@ -3405,7 +3440,7 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_bool(props, "vertical_layout", obs_module_text("VerticalLayout"));
 	obs_properties_add_bool(props, "hide_album_art", obs_module_text("HideAlbumArt"));
 	obs_properties_add_bool(props, "show_progress_bar", obs_module_text("ShowProgressBar"));
-	obs_properties_add_bool(props, "show_album_name", obs_module_text("ShowAlbumName"));	
+	obs_properties_add_bool(props, "show_album_name", obs_module_text("ShowAlbumName"));
 	obs_properties_add_bool(props, "track_change_animation_enabled", obs_module_text("TrackChangeAnimation"));
 	obs_properties_add_bool(props, "autohide_when_not_playing", obs_module_text("AutohideWhenNotPlaying"));
 	obs_property_t *autohide_prop = obs_properties_add_bool(props, "autohide_enabled", obs_module_text("AutohideEnabled"));
@@ -3427,7 +3462,7 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "artist_outline_size", obs_module_text("ArtistOutlineSize"), 1, 50, 1);
 	obs_properties_add_color_alpha(props, "artist_outline_color", obs_module_text("ArtistOutlineColor"));
 	obs_property_set_modified_callback(artist_outline_enabled_prop, artist_outline_enabled_modified);
-	
+
 	obs_property_t *use_album_art_as_bg_prop = obs_properties_add_bool(props, "use_album_art_as_bg", obs_module_text("UseAlbumArtAsBackground"));
 	obs_properties_add_int(props, "album_art_bg_blur", obs_module_text("AlbumArtBackgroundBlur"), 0, 100, 1);
 	obs_property_set_modified_callback(use_album_art_as_bg_prop, use_album_art_as_bg_modified);
@@ -3438,15 +3473,15 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "bg_opacity", obs_module_text("BackgroundOpacity"), 0, 100, 1);
 	obs_properties_add_int(props, "background_corner_radius", obs_module_text("BackgroundCornerRadius"), 1, 100, 1);
 	obs_properties_add_int(props, "album_art_corner_radius", obs_module_text("AlbumArtCornerRadius"), 1, 100, 1);
-	
+
 	obs_properties_add_int(props, "text_offset_y", obs_module_text("TextVerticalOffset"), -1000, 1000, 1);
-	obs_properties_add_int(props, "scroll_speed_ms", obs_module_text("ScrollSpeed"), 50, 5000, 10);	
+	obs_properties_add_int(props, "scroll_speed_ms", obs_module_text("ScrollSpeed"), 50, 5000, 10);
 	obs_properties_add_color_alpha(props, "progress_fill_color", obs_module_text("ProgressFillColor"));
 	obs_properties_add_color_alpha(props, "progress_bg_color", obs_module_text("ProgressBackgroundColor"));
 	obs_properties_add_int(props, "progress_bar_height", obs_module_text("ProgressBarHeight"), 2, 1000, 1);
 	obs_properties_add_int(props, "progress_bar_gap", obs_module_text("ProgressBarGap"), -1000, 1000, 1);
 	obs_property_t *vu_prop = obs_properties_add_bool(props, "vu_meter_enabled", obs_module_text("ShowVUMeter"));
-	obs_properties_add_bool(props, "vu_horizontal", obs_module_text("VUMeterHorizontalOrientation"));	
+	obs_properties_add_bool(props, "vu_horizontal", obs_module_text("VUMeterHorizontalOrientation"));
 	obs_properties_add_color_alpha(props, "vu_color", obs_module_text("VUMeterColor"));
 	obs_properties_add_int(props, "vu_update_ms", obs_module_text("VUUpdateSpeed"), 50, 2000, 10);
 	obs_properties_add_int(props, "vu_randomness", obs_module_text("VURandomness"), 0, 100, 5);
@@ -3469,10 +3504,10 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "vhs_chroma_aberration", obs_module_text("VhsChromaticAberration"), 0, 100, 1);
 	obs_properties_add_int(props, "vhs_smear_amount", obs_module_text("VhsSmearAmount"), 0, 100, 1);
 	obs_properties_add_float(props, "vhs_smear_burst_min_s", obs_module_text("VhsSmearMinLength"), 1.0, 6000.0, 1.0);
-	obs_properties_add_float(props, "vhs_smear_burst_max_s", obs_module_text("VhsSmearMaxLength"), 1.0, 6000.0, 1.0);	
+	obs_properties_add_float(props, "vhs_smear_burst_max_s", obs_module_text("VhsSmearMaxLength"), 1.0, 6000.0, 1.0);
 	obs_properties_add_float(props, "vhs_smear_min_interval_s", obs_module_text("VhsSmearMinInterval"), 1.0, 6000.0, 1.0);
 	obs_properties_add_float(props, "vhs_smear_max_interval_s", obs_module_text("VhsSmearMaxInterval"), 1.0, 6000.0, 1.0);
-	
+
 	obs_properties_add_int(props, "vhs_grain_amount", obs_module_text("VhsGrainAmount"), 0, 100, 1);
 	obs_properties_add_int(props, "vhs_scanline_spacing", obs_module_text("VhsScanlineSpacing"), 1, 20, 1);
 	obs_properties_add_int(props, "vhs_scanline_intensity", obs_module_text("VhsScanlineIntensity"), 0, 100, 1);
