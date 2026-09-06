@@ -6,4 +6,5 @@ applemusic
 cider
 focal
 vlc
+qqmusic
 口ひげさん
