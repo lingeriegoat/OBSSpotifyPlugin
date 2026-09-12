@@ -191,7 +191,7 @@ constexpr bool DEFAULT_ENABLE_BROWSER_MEDIA_SOURCES = false;
 //"308046B0AF4A39CB" is firefox, this will hopefully be fixed in the future
 //https://bugzilla.mozilla.org/show_bug.cgi?id=2065866
 const char *const DEFAULT_MUSIC_SYSTEMS[] = {
-	"spotify", "youtube", "ytm", "pear", "applemusic", "cider", "focal", "vlc",
+	"spotify", "youtube", "ytm", "applemusic", "cider", "focal", "vlc", "qqmusic",
 };
 const char *const DEFAULT_BROWSER_SOURCES[] = {
 	"operagx", "opera", "brave", "safari", "msedge", "explorer", "firefox", "308046B0AF4A39CB", "chrome",
@@ -736,6 +736,7 @@ struct GlitchChannelBlock {
 	X(bool, vu_horizontal, false) \
 	X(bool, vertical_layout, false) \
 	X(bool, show_album_name, false) \
+	X(bool, show_song_artist_single_line, false) \
 	X(bool, show_goat_placeholder, true) \
 	X(bool, show_plugin_attribution, true) \
 	X(bool, hide_album_art, false) \
@@ -2045,7 +2046,7 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 	Color artistOutlineColor = ObsColorToGdip(s.artist_outline_color);
 
 	int titleLineH = titleSize + 10;
-	int artistLineH = artistSize + 8;
+	int artistLineH = s.show_song_artist_single_line ? 0 : (artistSize + 8);
 	int progressH = s.show_progress_bar ? (s.progress_bar_gap + s.progress_bar_height) : 0;
 	int blockH = titleLineH + artistLineH + progressH;
 
@@ -2350,13 +2351,23 @@ static void poll_loop(spotify_source *ctx)
 			std::string artist = has ? std::string(info.ArtistName) : std::string();
 
 			bool show_album_name;
+			bool single_line;
 			{
 				std::lock_guard<std::mutex> lock(ctx->settings_mutex);
 				show_album_name = ctx->show_album_name;
+				single_line = ctx->show_song_artist_single_line;
 			}
+
+			std::string albumSuffix;
 			if (show_album_name) {
-				std::string albumName = " - " + std::string(info.AlbumName);
-				artist.append(albumName);
+				albumSuffix = " - " + std::string(info.AlbumName);
+			}
+
+			if (single_line) {
+				title.append(" - ").append(artist).append(albumSuffix);
+				artist.clear();
+			} else {
+				artist.append(albumSuffix);
 			}
 
 			bool track_changed = (has != ctx->have_track) || (title != ctx->last_song) || (artist != ctx->last_artist);
@@ -2887,7 +2898,7 @@ static const char *const kSettingsIntKeys[] = {
 };
 
 static const char *const kSettingsBoolKeys[] = {
-	"use_bg_image", "vu_meter_enabled", "vu_horizontal", "vertical_layout", "show_album_name", "show_goat_placeholder", "show_plugin_attribution", "hide_album_art", "show_progress_bar", "track_change_animation_enabled", "autohide_enabled", "autohide_when_not_playing", "title_outline_enabled", "artist_outline_enabled", "use_album_art_as_bg",
+	"use_bg_image", "vu_meter_enabled", "vu_horizontal", "vertical_layout", "show_album_name", "show_song_artist_single_line", "show_goat_placeholder", "show_plugin_attribution", "hide_album_art", "show_progress_bar", "track_change_animation_enabled", "autohide_enabled", "autohide_when_not_playing", "title_outline_enabled", "artist_outline_enabled", "use_album_art_as_bg",
 };
 
 static const char *const kSettingsStringKeys[] = {
@@ -3144,6 +3155,7 @@ static void apply_settings(spotify_source *ctx, obs_data_t *settings)
 	ctx->vu_horizontal = obs_data_get_bool(settings, "vu_horizontal");
 	ctx->vertical_layout = obs_data_get_bool(settings, "vertical_layout");
 	ctx->show_album_name = obs_data_get_bool(settings, "show_album_name");
+	ctx->show_song_artist_single_line = obs_data_get_bool(settings, "show_song_artist_single_line");
 	ctx->show_goat_placeholder = obs_data_get_bool(settings, "show_goat_placeholder");
 	ctx->show_plugin_attribution = obs_data_get_bool(settings, "show_plugin_attribution");
 	ctx->hide_album_art = obs_data_get_bool(settings, "hide_album_art");
@@ -3308,6 +3320,7 @@ static void spotify_source_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, "show_plugin_attribution", true);
 	obs_data_set_default_bool(settings, "hide_album_art", false);
 	obs_data_set_default_bool(settings, "show_album_name", false);
+	obs_data_set_default_bool(settings, "show_song_artist_single_line", false);
 
 	obs_data_set_default_bool(settings, "show_progress_bar", true);
 	obs_data_set_default_int(settings, "progress_fill_color", DEFAULT_COLOR_WHITE);
@@ -3363,11 +3376,27 @@ static bool title_outline_enabled_modified(obs_properties_t *props, obs_property
 	return true;
 }
 
+static void update_artist_style_properties(obs_properties_t *props, obs_data_t *settings)
+{
+	bool single_line = obs_data_get_bool(settings, "show_song_artist_single_line");
+	bool outline_enabled = obs_data_get_bool(settings, "artist_outline_enabled");
+
+	obs_property_set_enabled(obs_properties_get(props, "artist_font"), !single_line);
+	obs_property_set_enabled(obs_properties_get(props, "artist_color"), !single_line);
+	obs_property_set_enabled(obs_properties_get(props, "artist_outline_color"), !single_line && outline_enabled);
+}
+
 static bool artist_outline_enabled_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
 {
 	bool enabled = obs_data_get_bool(settings, "artist_outline_enabled");
 	obs_property_set_enabled(obs_properties_get(props, "artist_outline_size"), enabled);
-	obs_property_set_enabled(obs_properties_get(props, "artist_outline_color"), enabled);
+	update_artist_style_properties(props, settings);
+	return true;
+}
+
+static bool show_song_artist_single_line_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
+{
+	update_artist_style_properties(props, settings);
 	return true;
 }
 
@@ -3440,6 +3469,8 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_bool(props, "vertical_layout", obs_module_text("VerticalLayout"));
 	obs_properties_add_bool(props, "hide_album_art", obs_module_text("HideAlbumArt"));
 	obs_properties_add_bool(props, "show_progress_bar", obs_module_text("ShowProgressBar"));
+	obs_property_t *single_line_prop = obs_properties_add_bool(props, "show_song_artist_single_line", obs_module_text("ShowSongArtistSingleLine"));
+	obs_property_set_modified_callback(single_line_prop, show_song_artist_single_line_modified);
 	obs_properties_add_bool(props, "show_album_name", obs_module_text("ShowAlbumName"));
 	obs_properties_add_bool(props, "track_change_animation_enabled", obs_module_text("TrackChangeAnimation"));
 	obs_properties_add_bool(props, "autohide_when_not_playing", obs_module_text("AutohideWhenNotPlaying"));
@@ -3462,7 +3493,7 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "artist_outline_size", obs_module_text("ArtistOutlineSize"), 1, 50, 1);
 	obs_properties_add_color_alpha(props, "artist_outline_color", obs_module_text("ArtistOutlineColor"));
 	obs_property_set_modified_callback(artist_outline_enabled_prop, artist_outline_enabled_modified);
-
+	
 	obs_property_t *use_album_art_as_bg_prop = obs_properties_add_bool(props, "use_album_art_as_bg", obs_module_text("UseAlbumArtAsBackground"));
 	obs_properties_add_int(props, "album_art_bg_blur", obs_module_text("AlbumArtBackgroundBlur"), 0, 100, 1);
 	obs_property_set_modified_callback(use_album_art_as_bg_prop, use_album_art_as_bg_modified);

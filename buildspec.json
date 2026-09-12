@@ -38,7 +38,7 @@
   },
   "name": "obs-spotify-overlay-plugin",
   "displayName": "OBS Spotify Overlay Plugin",
-  "version": "2.5",
+  "version": "2.6",
   "author": "Lingerie Goat",
   "website": "https://github.com/lingeriegoat",
   "email": "dont@email.me"
