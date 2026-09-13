@@ -42,9 +42,9 @@ If you want to use a release before 1.8, the distribution method was slightly di
 
 # Known limitations
 
-Only works on windows. Only works for spotify, youtube music, and apple music desktop clients. Works with VLC but requires a specific plugin.
+Only works on windows. Only works with clients that provide SMTC data (press win+a, if your client appears in the media control panel, it will work). Works with VLC but requires a specific plugin.
 
-If you want more sources to be supported, please let me know what they are and I can see if its feasible to add support.
+If you have a very popular source you think I have overlooked and want support for it added by default, please let me know.
 
 Mac and linux support are infeasible as this plugin relies on a windows subsystem which has no equivalent on either mac or linux.
 
@@ -123,7 +123,7 @@ Follow the format of the files and put any new source on its own line. Blank lin
 
 These source lists work the same way as the internal list did, where it is a ranked choice, top to botton, meaning that if `youtube` appears in the file before `spotify`, `youtube` will have priority when the plugin searches for a source, and if no youtube source is found, it will then check for `spotify`.
 
-They sources are case insensitive, everything is converted to lowercase before being checked.
+The sources are case insensitive, everything is converted to lowercase before being checked.
 
 Browser sources will ONLY be checked if you have the "Enable browser media sources?" option enabled in the plugin. They are checked after traditional music sources. `308046B0AF4A39CB` in the browser sources is firefox, see [http://bugzilla.mozilla.org/show_bug.cgi?id=2065866](https://bugzilla.mozilla.org/show_bug.cgi?id=2065866)
 
