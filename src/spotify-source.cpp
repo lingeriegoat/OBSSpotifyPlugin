@@ -87,6 +87,9 @@ constexpr int DEFAULT_COLOR_GREEN = 0xFF60D71E;
 constexpr int DEFAULT_ALBUM_ART_BG_BLUR_PCT = 50;
 constexpr int DEFAULT_TEXT_OUTLINE_SIZE_PX = 2;
 constexpr int DEFAULT_ANIMATION_UPDATE_MS = 100;
+constexpr int DEFAULT_MIN_CARD_DIMENSION = 10;
+constexpr int DEFAULT_MIN_CORNER_RADIUS = 0;
+constexpr int DEFAULT_MAX_CORNER_RADIUS = 100;
 
 constexpr int DEFAULT_VU_COLOR = 0xFFFFFFFF;
 constexpr int DEFAULT_VU_UPDATE_SPEED_MS = 250;
@@ -484,14 +487,36 @@ struct ScopedGraphics {
 	ScopedGraphics &operator=(const ScopedGraphics &) = delete;
 };
 
-void AddRoundedRect(GraphicsPath &path, const Rect &r, int radius)
+void AddRoundedRectDimension(GraphicsPath &path, const Rect &r, int radius)
 {
 	int d = radius * 2;
+
 	path.Reset();
 	path.AddArc(r.X, r.Y, d, d, 180, 90);
 	path.AddArc(r.X + r.Width - d, r.Y, d, d, 270, 90);
 	path.AddArc(r.X + r.Width - d, r.Y + r.Height - d, d, d, 0, 90);
 	path.AddArc(r.X, r.Y + r.Height - d, d, d, 90, 90);
+	path.CloseFigure();
+}
+
+void AddRoundedRectPercent(GraphicsPath &path, const Rect &r, int radiusPercent)
+{
+	radiusPercent = std::clamp(radiusPercent, 0, 100);
+
+	path.Reset();
+
+	if (radiusPercent == 0) {
+		path.AddRectangle(r);
+		return;
+	}
+
+	REAL radius = (std::min(r.Width, r.Height) / 2.0f) * radiusPercent / 100.0f;
+	REAL d = radius * 2.0f;
+
+	path.AddArc((REAL)r.X, (REAL)r.Y, d, d, 180.0f, 90.0f);
+	path.AddArc((REAL)r.X + r.Width - d, (REAL)r.Y, d, d, 270.0f, 90.0f);
+	path.AddArc((REAL)r.X + r.Width - d, (REAL)r.Y + r.Height - d, d, d, 0.0f, 90.0f);
+	path.AddArc((REAL)r.X, (REAL)r.Y + r.Height - d, d, d, 90.0f, 90.0f);
 	path.CloseFigure();
 }
 
@@ -978,7 +1003,7 @@ static void DrawVuMeter(Graphics &g, spotify_source *ctx, const AppearanceSettin
 
 			Rect barRect(barX, barY, barThickness, barH);
 			GraphicsPath barPath;
-			AddRoundedRect(barPath, barRect, std::min(2, barThickness / 2));
+			AddRoundedRectDimension(barPath, barRect, std::min(2, barThickness / 2));
 			g.FillPath(&vuBrush, &barPath);
 		}
 	} else {
@@ -994,7 +1019,7 @@ static void DrawVuMeter(Graphics &g, spotify_source *ctx, const AppearanceSettin
 
 			Rect barRect(barX, barY, barLen, barThickness);
 			GraphicsPath barPath;
-			AddRoundedRect(barPath, barRect, std::min(2, barThickness / 2));
+			AddRoundedRectDimension(barPath, barRect, std::min(2, barThickness / 2));
 			g.FillPath(&vuBrush, &barPath);
 		}
 	}
@@ -1025,7 +1050,7 @@ static void DrawProgressBar(Graphics &g, spotify_source *ctx, const AppearanceSe
 	Color bgColor = ObsColorToGdip(s.progress_bg_color);
 	SolidBrush bgBrush(bgColor);
 	GraphicsPath bgPath;
-	AddRoundedRect(bgPath, barRect, barRect.Height / 2);
+	AddRoundedRectDimension(bgPath, barRect, barRect.Height / 2);
 	g.FillPath(&bgBrush, &bgPath);
 
 	int fillWidth = (int)std::lround(barRect.Width * frac);
@@ -1034,7 +1059,7 @@ static void DrawProgressBar(Graphics &g, spotify_source *ctx, const AppearanceSe
 		Color fillColor = ObsColorToGdip(s.progress_fill_color);
 		SolidBrush fillBrush(fillColor);
 		GraphicsPath fillPath;
-		AddRoundedRect(fillPath, fillRect, barRect.Height / 2);
+		AddRoundedRectDimension(fillPath, fillRect, barRect.Height / 2);
 		g.FillPath(&fillBrush, &fillPath);
 	}
 }
@@ -1991,7 +2016,7 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 
 	// card background
 	GraphicsPath bgPath;
-	AddRoundedRect(bgPath, Rect(0, 0, cardW, cardH), s.background_corner_radius);
+	AddRoundedRectPercent(bgPath, Rect(0, 0, cardW, cardH), s.background_corner_radius);
 
 	Image *bgImage = nullptr;
 	if (s.use_album_art_as_bg && ctx->cached_art_image) {
@@ -2152,7 +2177,7 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 
 	if (showArt) {
 		GraphicsPath artClip;
-		AddRoundedRect(artClip, artRect, s.album_art_corner_radius);
+		AddRoundedRectPercent(artClip, artRect, s.album_art_corner_radius);
 
 		Region savedClip;
 		g.GetClip(&savedClip);
@@ -3109,16 +3134,16 @@ static void apply_settings(spotify_source *ctx, obs_data_t *settings)
 	ctx->album_art_bg_blur_pct = std::clamp(ctx->album_art_bg_blur_pct, 0, 100);
 
 	ctx->background_corner_radius = (int)obs_data_get_int(settings, "background_corner_radius");
-	ctx->background_corner_radius = std::clamp(ctx->background_corner_radius, 0, 100);
+	ctx->background_corner_radius = std::clamp(ctx->background_corner_radius, DEFAULT_MIN_CORNER_RADIUS, DEFAULT_MAX_CORNER_RADIUS);
 
 	ctx->album_art_corner_radius = (int)obs_data_get_int(settings, "album_art_corner_radius");
-	ctx->album_art_corner_radius = std::clamp(ctx->album_art_corner_radius, 0, 100);
+	ctx->album_art_corner_radius = std::clamp(ctx->album_art_corner_radius, DEFAULT_MIN_CORNER_RADIUS, DEFAULT_MAX_CORNER_RADIUS);
 
 	ctx->card_w = (int)obs_data_get_int(settings, "card_width");
-	ctx->card_w = std::clamp(ctx->card_w, 50, 4000);
+	ctx->card_w = std::clamp(ctx->card_w, DEFAULT_MIN_CARD_DIMENSION, 4000);
 
 	ctx->card_h = (int)obs_data_get_int(settings, "card_height");
-	ctx->card_h = std::clamp(ctx->card_h, 30, 2000);
+	ctx->card_h = std::clamp(ctx->card_h, DEFAULT_MIN_CARD_DIMENSION, 2000);
 
 	ctx->text_offset_y = (int)obs_data_get_int(settings, "text_offset_y");
 	ctx->text_offset_y = std::clamp(ctx->text_offset_y, -1000, 1000);
@@ -3477,8 +3502,8 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_property_t *autohide_prop = obs_properties_add_bool(props, "autohide_enabled", obs_module_text("AutohideEnabled"));
 	obs_properties_add_int(props, "autohide_after_s", obs_module_text("AutohideAfterSeconds"), 1, 3600, 1);
 	obs_property_set_modified_callback(autohide_prop, autohide_enabled_modified);
-	obs_properties_add_int(props, "card_width", obs_module_text("CardWidth"), 50, 4000, 10);
-	obs_properties_add_int(props, "card_height", obs_module_text("CardHeight"), 30, 2000, 10);
+	obs_properties_add_int(props, "card_width", obs_module_text("CardWidth"), DEFAULT_MIN_CARD_DIMENSION, 4000, 10);
+	obs_properties_add_int(props, "card_height", obs_module_text("CardHeight"), DEFAULT_MIN_CARD_DIMENSION, 2000, 10);
 	obs_properties_add_font(props, "title_font", obs_module_text("TitleFont"));
 	obs_properties_add_font(props, "artist_font", obs_module_text("ArtistFont"));
 	obs_properties_add_color_alpha(props, "title_color", obs_module_text("TitleColor"));
@@ -3502,8 +3527,8 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_property_set_modified_callback(use_bg_image_prop, use_bg_image_modified);
 	obs_properties_add_color(props, "bg_color", obs_module_text("BackgroundColor"));
 	obs_properties_add_int(props, "bg_opacity", obs_module_text("BackgroundOpacity"), 0, 100, 1);
-	obs_properties_add_int(props, "background_corner_radius", obs_module_text("BackgroundCornerRadius"), 1, 100, 1);
-	obs_properties_add_int(props, "album_art_corner_radius", obs_module_text("AlbumArtCornerRadius"), 1, 100, 1);
+	obs_properties_add_int(props, "background_corner_radius", obs_module_text("BackgroundCornerRadius"), DEFAULT_MIN_CORNER_RADIUS, DEFAULT_MAX_CORNER_RADIUS, 1);
+	obs_properties_add_int(props, "album_art_corner_radius", obs_module_text("AlbumArtCornerRadius"), DEFAULT_MIN_CORNER_RADIUS, DEFAULT_MAX_CORNER_RADIUS, 1);
 
 	obs_properties_add_int(props, "text_offset_y", obs_module_text("TextVerticalOffset"), -1000, 1000, 1);
 	obs_properties_add_int(props, "scroll_speed_ms", obs_module_text("ScrollSpeed"), 50, 5000, 10);
