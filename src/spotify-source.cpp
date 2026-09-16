@@ -868,6 +868,13 @@ struct spotify_source {
 	std::unique_ptr<Bitmap> cached_blurred_art;
 	bool cached_blurred_art_valid = false;
 
+	std::unique_ptr<Bitmap> cached_art_bg_layer;
+	bool cached_art_bg_layer_valid = false;
+	int cached_art_bg_layer_w = 0;
+	int cached_art_bg_layer_h = 0;
+	int cached_art_bg_layer_opacity = -1;
+	bool cached_art_bg_layer_blurred = false;
+
 	bool title_needs_scroll = false;
 	bool artist_needs_scroll = false;
 	double title_scroll_px = 0.0;
@@ -945,6 +952,13 @@ struct spotify_source {
 
 	std::unique_ptr<Image> cached_bg_image;
 	std::string cached_bg_image_path;
+
+	std::unique_ptr<Bitmap> cached_bg_image_layer;
+	bool cached_bg_image_layer_valid = false;
+	std::string cached_bg_image_layer_path;
+	int cached_bg_image_layer_w = 0;
+	int cached_bg_image_layer_h = 0;
+	int cached_bg_image_layer_opacity = -1;
 
 	std::unique_ptr<Bitmap> cached_bitmap;
 	int cached_bitmap_w = 0;
@@ -1148,6 +1162,7 @@ static bool ArtBytesDiffer(const std::vector<uint8_t> &cached, const uint8_t *im
 static void UpdateCachedArt(spotify_source *ctx, const uint8_t *image_data, int image_len)
 {
 	ctx->cached_blurred_art_valid = false;
+	ctx->cached_art_bg_layer_valid = false;
 	ctx->cached_art_image.reset();
 	if (image_data == nullptr || image_len <= 0) {
 		ctx->last_art_bytes.clear();
@@ -1195,15 +1210,13 @@ static void DrawAlbumArtBackground(Graphics &g, spotify_source *ctx, Image *art,
 		attr.SetColorMatrix(&cm, ColorMatrixFlagsDefault, ColorAdjustTypeBitmap);
 	}
 
-	Region savedClip;
-	g.GetClip(&savedClip);
-	g.SetClip(&clipPath);
-
 	RectF destRect(0.0f, 0.0f, (REAL)cardW, (REAL)cardH);
 	int pct = std::clamp(blurPct, 0, 100);
 
-	if (ctx->settings_dirty)
+	if (ctx->settings_dirty) {
 		ctx->cached_blurred_art_valid = false;
+		ctx->cached_art_bg_layer_valid = false;
+	}
 
 	bool blurred = false;
 	if (pct > 0) {
@@ -1224,18 +1237,33 @@ static void DrawAlbumArtBackground(Graphics &g, spotify_source *ctx, Image *art,
 				ctx->cached_blurred_art.reset();
 				ctx->cached_blurred_art_valid = false;
 			}
+			ctx->cached_art_bg_layer_valid = false;
 		}
 
-		if (ctx->cached_blurred_art_valid) {
-			g.DrawImage(ctx->cached_blurred_art.get(), destRect, 0.0f, 0.0f, (REAL)cardW, (REAL)cardH, UnitPixel, &attr);
+		if (ctx->cached_blurred_art_valid)
 			blurred = true;
-		}
 	}
 
-	if (!blurred)
-		g.DrawImage(art, destRect, 0.0f, srcY, srcW, srcCropH, UnitPixel, &attr);
+	bool needRebuild = !ctx->cached_art_bg_layer_valid || !ctx->cached_art_bg_layer || ctx->cached_art_bg_layer_w != cardW || ctx->cached_art_bg_layer_h != cardH || ctx->cached_art_bg_layer_opacity != opacityPercent || ctx->cached_art_bg_layer_blurred != blurred;
 
-	g.SetClip(&savedClip);
+	if (needRebuild) {
+		ctx->cached_art_bg_layer = std::make_unique<Bitmap>(cardW, cardH, PixelFormat32bppARGB);
+		Graphics gLayer(ctx->cached_art_bg_layer.get());
+		gLayer.Clear(Color(0, 0, 0, 0));
+		if (blurred)
+			gLayer.DrawImage(ctx->cached_blurred_art.get(), destRect, 0.0f, 0.0f, (REAL)cardW, (REAL)cardH, UnitPixel, &attr);
+		else
+			gLayer.DrawImage(art, destRect, 0.0f, srcY, srcW, srcCropH, UnitPixel, &attr);
+
+		ctx->cached_art_bg_layer_w = cardW;
+		ctx->cached_art_bg_layer_h = cardH;
+		ctx->cached_art_bg_layer_opacity = opacityPercent;
+		ctx->cached_art_bg_layer_blurred = blurred;
+		ctx->cached_art_bg_layer_valid = true;
+	}
+
+	TextureBrush brush(ctx->cached_art_bg_layer.get(), WrapModeClamp);
+	g.FillPath(&brush, &clipPath);
 }
 
 static Bitmap *EnsureNoiseTexture(std::unique_ptr<Bitmap> &cache)
@@ -2029,27 +2057,38 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 				bgImage = ctx->cached_bg_image.get();
 		}
 		if (bgImage) {
-			Region savedBgClip;
-			g.GetClip(&savedBgClip);
-			g.SetClip(&bgPath);
-
 			UINT imgW = bgImage->GetWidth();
 			UINT imgH = bgImage->GetHeight();
 			REAL srcW = (REAL)std::min<UINT>(imgW, (UINT)cardW);
 			REAL srcH = (REAL)std::min<UINT>(imgH, (UINT)cardH);
+			int srcWi = (int)std::ceil(srcW);
+			int srcHi = (int)std::ceil(srcH);
 
-			ImageAttributes bgAttr;
-			if (s.bg_opacity < 100) {
-				REAL a = std::clamp(s.bg_opacity, 0, 100) / 100.0f;
-				Gdiplus::ColorMatrix cm = {1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, a, 0, 0, 0, 0, 0, 1};
-				bgAttr.SetColorMatrix(&cm, ColorMatrixFlagsDefault, ColorAdjustTypeBitmap);
+			bool needRebuild = !ctx->cached_bg_image_layer_valid || !ctx->cached_bg_image_layer || ctx->cached_bg_image_layer_path != ctx->cached_bg_image_path || ctx->cached_bg_image_layer_w != srcWi || ctx->cached_bg_image_layer_h != srcHi || ctx->cached_bg_image_layer_opacity != s.bg_opacity;
+
+			if (needRebuild) {
+				ImageAttributes bgAttr;
+				if (s.bg_opacity < 100) {
+					REAL a = std::clamp(s.bg_opacity, 0, 100) / 100.0f;
+					Gdiplus::ColorMatrix cm = {1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, a, 0, 0, 0, 0, 0, 1};
+					bgAttr.SetColorMatrix(&cm, ColorMatrixFlagsDefault, ColorAdjustTypeBitmap);
+				}
+
+				ctx->cached_bg_image_layer = std::make_unique<Bitmap>(srcWi, srcHi, PixelFormat32bppARGB);
+				Graphics gBgLayer(ctx->cached_bg_image_layer.get());
+				gBgLayer.Clear(Color(0, 0, 0, 0));
+				RectF bgDestRect(0.0f, 0.0f, srcW, srcH);
+				gBgLayer.DrawImage(bgImage, bgDestRect, 0.0f, 0.0f, srcW, srcH, UnitPixel, &bgAttr);
+
+				ctx->cached_bg_image_layer_path = ctx->cached_bg_image_path;
+				ctx->cached_bg_image_layer_w = srcWi;
+				ctx->cached_bg_image_layer_h = srcHi;
+				ctx->cached_bg_image_layer_opacity = s.bg_opacity;
+				ctx->cached_bg_image_layer_valid = true;
 			}
 
-			// Draw the top-left crop of the source image 1:1 (no scaling) into the card
-			RectF bgDestRect(0.0f, 0.0f, srcW, srcH);
-			g.DrawImage(bgImage, bgDestRect, 0.0f, 0.0f, srcW, srcH, UnitPixel, &bgAttr);
-
-			g.SetClip(&savedBgClip);
+			TextureBrush bgBrush(ctx->cached_bg_image_layer.get(), WrapModeClamp);
+			g.FillPath(&bgBrush, &bgPath);
 		} else {
 			SolidBrush bgBrush(ObsColorToGdipWithAlpha(s.bg_color, s.bg_opacity));
 			g.FillPath(&bgBrush, &bgPath);
@@ -2179,27 +2218,21 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 		GraphicsPath artClip;
 		AddRoundedRectPercent(artClip, artRect, s.album_art_corner_radius);
 
-		Region savedClip;
-		g.GetClip(&savedClip);
-		g.SetClip(&artClip);
+		Image *artSource = ctx->cached_art_image ? ctx->cached_art_image.get() : nullptr;
+		if (!artSource && s.show_goat_placeholder)
+			artSource = GetGoatImage(ctx);
 
-		bool drewArt = false;
-		if (ctx->cached_art_image) {
-			g.DrawImage(ctx->cached_art_image.get(), artRect);
-			drewArt = true;
-		}
-		if (!drewArt && s.show_goat_placeholder) {
-			Image *goat = GetGoatImage(ctx);
-			if (goat) {
-				g.DrawImage(goat, artRect);
-				drewArt = true;
-			}
-		}
-		if (!drewArt) {
+		if (artSource) {
+			TextureBrush artBrush(artSource, WrapModeClamp);
+			Matrix m;
+			m.Translate((REAL)artRect.X, (REAL)artRect.Y);
+			m.Scale((REAL)artRect.Width / (REAL)artSource->GetWidth(), (REAL)artRect.Height / (REAL)artSource->GetHeight());
+			artBrush.SetTransform(&m);
+			g.FillPath(&artBrush, &artClip);
+		} else {
 			SolidBrush placeholder(Color(255, 55, 55, 60));
-			g.FillRectangle(&placeholder, artRect);
+			g.FillPath(&placeholder, &artClip);
 		}
-		g.SetClip(&savedClip);
 	}
 
 	// text (shared drawing code)
@@ -3518,7 +3551,7 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "artist_outline_size", obs_module_text("ArtistOutlineSize"), 1, 50, 1);
 	obs_properties_add_color_alpha(props, "artist_outline_color", obs_module_text("ArtistOutlineColor"));
 	obs_property_set_modified_callback(artist_outline_enabled_prop, artist_outline_enabled_modified);
-	
+
 	obs_property_t *use_album_art_as_bg_prop = obs_properties_add_bool(props, "use_album_art_as_bg", obs_module_text("UseAlbumArtAsBackground"));
 	obs_properties_add_int(props, "album_art_bg_blur", obs_module_text("AlbumArtBackgroundBlur"), 0, 100, 1);
 	obs_property_set_modified_callback(use_album_art_as_bg_prop, use_album_art_as_bg_modified);
