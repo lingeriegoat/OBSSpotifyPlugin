@@ -3291,10 +3291,10 @@ static void apply_settings(spotify_source *ctx, obs_data_t *settings)
 	ctx->vhs_smear_amount = std::clamp(ctx->vhs_smear_amount, 0, 100);
 
 	ctx->vhs_smear_burst_min_s = std::max(1.0, obs_data_get_double(settings, "vhs_smear_burst_min_s"));
-	ctx->vhs_smear_burst_max_s = std::max(ctx->vhs_smear_burst_min_s, obs_data_get_double(settings, "vhs_smear_burst_min_s"));
+	ctx->vhs_smear_burst_max_s = std::max(ctx->vhs_smear_burst_min_s, obs_data_get_double(settings, "vhs_smear_burst_max_s"));
 
 	ctx->vhs_smear_min_interval_s = std::max(1.0, obs_data_get_double(settings, "vhs_smear_min_interval_s"));
-	ctx->vhs_smear_max_interval_s = std::max(ctx->vhs_smear_max_interval_s, obs_data_get_double(settings, "vhs_smear_min_interval_s"));
+	ctx->vhs_smear_max_interval_s = std::max(ctx->vhs_smear_max_interval_s, obs_data_get_double(settings, "vhs_smear_max_interval_s"));
 
 	ctx->vhs_scanline_spacing = std::max(1, (int)obs_data_get_int(settings, "vhs_scanline_spacing"));
 	ctx->vhs_scanline_intensity = std::clamp((int)obs_data_get_int(settings, "vhs_scanline_intensity"), 0, 100);
