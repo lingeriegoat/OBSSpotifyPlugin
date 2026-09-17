@@ -60,6 +60,8 @@ using namespace Gdiplus;
 
 namespace {
 
+constexpr UINT MAX_ART_DIMENSION = 16384; // sanity cap against a malformed/corrupt image header
+
 constexpr int DEFAULT_SESSION_GRACE_SECONDS = 3;
 constexpr int POLL_INTERVAL_MS = 250; // how often we poll SMTC
 constexpr int DEFAULT_CARD_W = 380;
@@ -520,6 +522,32 @@ void AddRoundedRectPercent(GraphicsPath &path, const Rect &r, int radiusPercent)
 	path.CloseFigure();
 }
 
+static REAL RoundedRectInsetAtDistance(REAL radius, REAL distFromEdge)
+{
+	if (radius <= 0.0f || distFromEdge >= radius)
+		return 0.0f;
+	REAL dy = radius - distFromEdge;
+	REAL underRoot = radius * radius - dy * dy;
+	return radius - std::sqrt(std::max(0.0f, underRoot));
+}
+
+static int RoundedRectCornerInset(int cardW, int cardH, int radiusPercent, int y0, int y1)
+{
+	radiusPercent = std::clamp(radiusPercent, 0, 100);
+	if (radiusPercent <= 0 || cardW <= 0 || cardH <= 0)
+		return 0;
+
+	REAL radius = (std::min(cardW, cardH) / 2.0f) * radiusPercent / 100.0f;
+	if (radius <= 0.0f)
+		return 0;
+
+	REAL top = (REAL)std::clamp(std::min(y0, y1), 0, cardH);
+	REAL bottom = (REAL)std::clamp(cardH - std::max(y0, y1), 0, cardH);
+
+	REAL inset = std::max(RoundedRectInsetAtDistance(radius, top), RoundedRectInsetAtDistance(radius, bottom));
+	return (int)std::ceil(inset);
+}
+
 Color ObsColorToGdip(long long packed)
 {
 	uint32_t v = (uint32_t)packed;
@@ -875,6 +903,12 @@ struct spotify_source {
 	int cached_art_bg_layer_opacity = -1;
 	bool cached_art_bg_layer_blurred = false;
 
+	std::unique_ptr<Bitmap> cached_art_thumb_layer;
+	bool cached_art_thumb_layer_valid = false;
+	int cached_art_thumb_layer_w = 0;
+	int cached_art_thumb_layer_h = 0;
+	const Image *cached_art_thumb_layer_source = nullptr;
+
 	bool title_needs_scroll = false;
 	bool artist_needs_scroll = false;
 	double title_scroll_px = 0.0;
@@ -1163,28 +1197,46 @@ static void UpdateCachedArt(spotify_source *ctx, const uint8_t *image_data, int 
 {
 	ctx->cached_blurred_art_valid = false;
 	ctx->cached_art_bg_layer_valid = false;
+	ctx->cached_art_thumb_layer_valid = false;
 	ctx->cached_art_image.reset();
 	if (image_data == nullptr || image_len <= 0) {
 		ctx->last_art_bytes.clear();
 		return;
 	}
 
-	IStream *stream = SHCreateMemStream(image_data, (UINT)image_len);
-	if (!stream)
-		return;
+	try {
+		IStream *stream = SHCreateMemStream(image_data, (UINT)image_len);
+		if (!stream)
+			return;
 
-	auto img = std::make_unique<Image>(stream);
-	stream->Release();
+		auto img = std::make_unique<Image>(stream);
+		stream->Release();
 
-	if (img->GetLastStatus() != Ok)
-		return;
+		if (img->GetLastStatus() != Ok)
+			return;
 
-	auto cloned = std::unique_ptr<Image>(img->Clone());
-	if (!cloned || cloned->GetLastStatus() != Ok)
-		return;
+		UINT w = img->GetWidth();
+		UINT h = img->GetHeight();
+		
+		if (w == 0 || h == 0 || w > MAX_ART_DIMENSION || h > MAX_ART_DIMENSION)
+			return;
 
-	ctx->cached_art_image = std::move(cloned);
-	ctx->last_art_bytes.assign(image_data, image_data + image_len);
+		auto normalized = std::make_unique<Bitmap>((INT)w, (INT)h, PixelFormat32bppARGB);
+		if (!normalized || normalized->GetLastStatus() != Ok)
+			return;
+
+		Graphics gNorm(normalized.get());
+		gNorm.Clear(Color(0, 0, 0, 0));
+		gNorm.DrawImage(img.get(), 0, 0, (INT)w, (INT)h);
+		if (gNorm.GetLastStatus() != Ok)
+			return;
+
+		ctx->cached_art_image = std::move(normalized);
+		ctx->last_art_bytes.assign(image_data, image_data + image_len);
+	} catch (...) {
+		ctx->cached_art_image.reset();
+		ctx->last_art_bytes.clear();
+	}
 }
 
 static void DrawAlbumArtBackground(Graphics &g, spotify_source *ctx, Image *art, GraphicsPath &clipPath, int cardW, int cardH, int blurPct, int opacityPercent)
@@ -1197,73 +1249,92 @@ static void DrawAlbumArtBackground(Graphics &g, spotify_source *ctx, Image *art,
 	if (imgW == 0 || imgH == 0 || cardW <= 0 || cardH <= 0)
 		return;
 
-	REAL srcW = (REAL)imgW;
-	REAL srcCropH = (REAL)cardH * (REAL)imgW / (REAL)cardW;
-	if (srcCropH > (REAL)imgH)
-		srcCropH = (REAL)imgH; // image isn't tall enough to fully cover; use all of it
-	REAL srcY = ((REAL)imgH - srcCropH) / 2.0f;
+	try {
+		REAL srcW = (REAL)imgW;
+		REAL srcCropH = (REAL)cardH * (REAL)imgW / (REAL)cardW;
+		if (srcCropH > (REAL)imgH)
+			srcCropH = (REAL)imgH; // image isn't tall enough to fully cover; use all of it
+		REAL srcY = ((REAL)imgH - srcCropH) / 2.0f;
 
-	ImageAttributes attr;
-	if (opacityPercent < 100) {
-		REAL a = std::clamp(opacityPercent, 0, 100) / 100.0f;
-		Gdiplus::ColorMatrix cm = {1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, a, 0, 0, 0, 0, 0, 1};
-		attr.SetColorMatrix(&cm, ColorMatrixFlagsDefault, ColorAdjustTypeBitmap);
-	}
+		ImageAttributes attr;
+		if (opacityPercent < 100) {
+			REAL a = std::clamp(opacityPercent, 0, 100) / 100.0f;
+			Gdiplus::ColorMatrix cm = {1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, a, 0, 0, 0, 0, 0, 1};
+			attr.SetColorMatrix(&cm, ColorMatrixFlagsDefault, ColorAdjustTypeBitmap);
+		}
 
-	RectF destRect(0.0f, 0.0f, (REAL)cardW, (REAL)cardH);
-	int pct = std::clamp(blurPct, 0, 100);
+		RectF destRect(0.0f, 0.0f, (REAL)cardW, (REAL)cardH);
+		int pct = std::clamp(blurPct, 0, 100);
 
-	if (ctx->settings_dirty) {
-		ctx->cached_blurred_art_valid = false;
-		ctx->cached_art_bg_layer_valid = false;
-	}
-
-	bool blurred = false;
-	if (pct > 0) {
-		if (!ctx->cached_blurred_art || !ctx->cached_blurred_art_valid) {
-			auto cropped = std::make_unique<Bitmap>(cardW, cardH, PixelFormat32bppARGB);
-			Graphics gc(cropped.get());
-			gc.SetInterpolationMode(InterpolationModeHighQualityBicubic);
-			gc.SetSmoothingMode(SmoothingModeHighQuality);
-			gc.Clear(Color(0, 0, 0, 0));
-			gc.DrawImage(art, destRect, 0.0f, srcY, srcW, srcCropH, UnitPixel, nullptr);
-
-			Gdiplus::Blur blurEffect;
-			Gdiplus::BlurParams blurParams = {(pct / 100.0f) * 40.0f, FALSE}; // 0-100% -> ~0-40px radius
-			if (blurEffect.SetParameters(&blurParams) == Ok && cropped->ApplyEffect(&blurEffect, nullptr) == Ok) {
-				ctx->cached_blurred_art = std::move(cropped);
-				ctx->cached_blurred_art_valid = true;
-			} else {
-				ctx->cached_blurred_art.reset();
-				ctx->cached_blurred_art_valid = false;
-			}
+		if (ctx->settings_dirty) {
+			ctx->cached_blurred_art_valid = false;
 			ctx->cached_art_bg_layer_valid = false;
 		}
 
-		if (ctx->cached_blurred_art_valid)
-			blurred = true;
+		bool blurred = false;
+		if (pct > 0) {
+			if (!ctx->cached_blurred_art || !ctx->cached_blurred_art_valid) {
+				auto cropped = std::make_unique<Bitmap>(cardW, cardH, PixelFormat32bppARGB);
+				if (cropped->GetLastStatus() == Ok) {
+					Graphics gc(cropped.get());
+					gc.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+					gc.SetSmoothingMode(SmoothingModeHighQuality);
+					gc.Clear(Color(0, 0, 0, 0));
+					gc.DrawImage(art, destRect, 0.0f, srcY, srcW, srcCropH, UnitPixel, nullptr);
+
+					Gdiplus::Blur blurEffect;
+					Gdiplus::BlurParams blurParams = {(pct / 100.0f) * 40.0f, FALSE}; // 0-100% -> ~0-40px radius
+					if (blurEffect.SetParameters(&blurParams) == Ok && cropped->ApplyEffect(&blurEffect, nullptr) == Ok) {
+						ctx->cached_blurred_art = std::move(cropped);
+						ctx->cached_blurred_art_valid = true;
+					} else {
+						ctx->cached_blurred_art.reset();
+						ctx->cached_blurred_art_valid = false;
+					}
+				} else {
+					ctx->cached_blurred_art.reset();
+					ctx->cached_blurred_art_valid = false;
+				}
+				ctx->cached_art_bg_layer_valid = false;
+			}
+
+			if (ctx->cached_blurred_art_valid)
+				blurred = true;
+		}
+
+		bool needRebuild = !ctx->cached_art_bg_layer_valid || !ctx->cached_art_bg_layer || ctx->cached_art_bg_layer_w != cardW || ctx->cached_art_bg_layer_h != cardH || ctx->cached_art_bg_layer_opacity != opacityPercent || ctx->cached_art_bg_layer_blurred != blurred;
+
+		if (needRebuild) {
+			auto layer = std::make_unique<Bitmap>(cardW, cardH, PixelFormat32bppARGB);
+			if (layer->GetLastStatus() != Ok) {
+				ctx->cached_art_bg_layer_valid = false;
+				return;
+			}
+			Graphics gLayer(layer.get());
+			gLayer.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+			gLayer.SetSmoothingMode(SmoothingModeHighQuality);
+			gLayer.SetPixelOffsetMode(PixelOffsetModeHighQuality);
+			gLayer.SetCompositingQuality(CompositingQualityHighQuality);
+			gLayer.Clear(Color(0, 0, 0, 0));
+			if (blurred)
+				gLayer.DrawImage(ctx->cached_blurred_art.get(), destRect, 0.0f, 0.0f, (REAL)cardW, (REAL)cardH, UnitPixel, &attr);
+			else
+				gLayer.DrawImage(art, destRect, 0.0f, srcY, srcW, srcCropH, UnitPixel, &attr);
+
+			ctx->cached_art_bg_layer = std::move(layer);
+			ctx->cached_art_bg_layer_w = cardW;
+			ctx->cached_art_bg_layer_h = cardH;
+			ctx->cached_art_bg_layer_opacity = opacityPercent;
+			ctx->cached_art_bg_layer_blurred = blurred;
+			ctx->cached_art_bg_layer_valid = true;
+		}
+
+		TextureBrush brush(ctx->cached_art_bg_layer.get(), WrapModeClamp);
+		g.FillPath(&brush, &clipPath);
+	} catch (...) {
+		ctx->cached_blurred_art_valid = false;
+		ctx->cached_art_bg_layer_valid = false;
 	}
-
-	bool needRebuild = !ctx->cached_art_bg_layer_valid || !ctx->cached_art_bg_layer || ctx->cached_art_bg_layer_w != cardW || ctx->cached_art_bg_layer_h != cardH || ctx->cached_art_bg_layer_opacity != opacityPercent || ctx->cached_art_bg_layer_blurred != blurred;
-
-	if (needRebuild) {
-		ctx->cached_art_bg_layer = std::make_unique<Bitmap>(cardW, cardH, PixelFormat32bppARGB);
-		Graphics gLayer(ctx->cached_art_bg_layer.get());
-		gLayer.Clear(Color(0, 0, 0, 0));
-		if (blurred)
-			gLayer.DrawImage(ctx->cached_blurred_art.get(), destRect, 0.0f, 0.0f, (REAL)cardW, (REAL)cardH, UnitPixel, &attr);
-		else
-			gLayer.DrawImage(art, destRect, 0.0f, srcY, srcW, srcCropH, UnitPixel, &attr);
-
-		ctx->cached_art_bg_layer_w = cardW;
-		ctx->cached_art_bg_layer_h = cardH;
-		ctx->cached_art_bg_layer_opacity = opacityPercent;
-		ctx->cached_art_bg_layer_blurred = blurred;
-		ctx->cached_art_bg_layer_valid = true;
-	}
-
-	TextureBrush brush(ctx->cached_art_bg_layer.get(), WrapModeClamp);
-	g.FillPath(&brush, &clipPath);
 }
 
 static Bitmap *EnsureNoiseTexture(std::unique_ptr<Bitmap> &cache)
@@ -2056,6 +2127,7 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 			else
 				bgImage = ctx->cached_bg_image.get();
 		}
+		bool bgLayerOk = false;
 		if (bgImage) {
 			UINT imgW = bgImage->GetWidth();
 			UINT imgH = bgImage->GetHeight();
@@ -2064,32 +2136,48 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 			int srcWi = (int)std::ceil(srcW);
 			int srcHi = (int)std::ceil(srcH);
 
-			bool needRebuild = !ctx->cached_bg_image_layer_valid || !ctx->cached_bg_image_layer || ctx->cached_bg_image_layer_path != ctx->cached_bg_image_path || ctx->cached_bg_image_layer_w != srcWi || ctx->cached_bg_image_layer_h != srcHi || ctx->cached_bg_image_layer_opacity != s.bg_opacity;
+			if (srcWi > 0 && srcHi > 0) {
+				try {
+					bool needRebuild = !ctx->cached_bg_image_layer_valid || !ctx->cached_bg_image_layer || ctx->cached_bg_image_layer_path != ctx->cached_bg_image_path || ctx->cached_bg_image_layer_w != srcWi || ctx->cached_bg_image_layer_h != srcHi || ctx->cached_bg_image_layer_opacity != s.bg_opacity;
 
-			if (needRebuild) {
-				ImageAttributes bgAttr;
-				if (s.bg_opacity < 100) {
-					REAL a = std::clamp(s.bg_opacity, 0, 100) / 100.0f;
-					Gdiplus::ColorMatrix cm = {1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, a, 0, 0, 0, 0, 0, 1};
-					bgAttr.SetColorMatrix(&cm, ColorMatrixFlagsDefault, ColorAdjustTypeBitmap);
+					if (needRebuild) {
+						ImageAttributes bgAttr;
+						if (s.bg_opacity < 100) {
+							REAL a = std::clamp(s.bg_opacity, 0, 100) / 100.0f;
+							Gdiplus::ColorMatrix cm = {1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, a, 0, 0, 0, 0, 0, 1};
+							bgAttr.SetColorMatrix(&cm, ColorMatrixFlagsDefault, ColorAdjustTypeBitmap);
+						}
+
+						auto layer = std::make_unique<Bitmap>(srcWi, srcHi, PixelFormat32bppARGB);
+						if (layer->GetLastStatus() == Ok) {
+							Graphics gBgLayer(layer.get());
+							gBgLayer.Clear(Color(0, 0, 0, 0));
+							RectF bgDestRect(0.0f, 0.0f, srcW, srcH);
+							gBgLayer.DrawImage(bgImage, bgDestRect, 0.0f, 0.0f, srcW, srcH, UnitPixel, &bgAttr);
+
+							ctx->cached_bg_image_layer = std::move(layer);
+							ctx->cached_bg_image_layer_path = ctx->cached_bg_image_path;
+							ctx->cached_bg_image_layer_w = srcWi;
+							ctx->cached_bg_image_layer_h = srcHi;
+							ctx->cached_bg_image_layer_opacity = s.bg_opacity;
+							ctx->cached_bg_image_layer_valid = true;
+						} else {
+							ctx->cached_bg_image_layer_valid = false;
+						}
+					}
+
+					if (ctx->cached_bg_image_layer_valid && ctx->cached_bg_image_layer) {
+						TextureBrush bgBrush(ctx->cached_bg_image_layer.get(), WrapModeClamp);
+						g.FillPath(&bgBrush, &bgPath);
+						bgLayerOk = true;
+					}
+				} catch (...) {
+					ctx->cached_bg_image_layer_valid = false;
+					bgLayerOk = false;
 				}
-
-				ctx->cached_bg_image_layer = std::make_unique<Bitmap>(srcWi, srcHi, PixelFormat32bppARGB);
-				Graphics gBgLayer(ctx->cached_bg_image_layer.get());
-				gBgLayer.Clear(Color(0, 0, 0, 0));
-				RectF bgDestRect(0.0f, 0.0f, srcW, srcH);
-				gBgLayer.DrawImage(bgImage, bgDestRect, 0.0f, 0.0f, srcW, srcH, UnitPixel, &bgAttr);
-
-				ctx->cached_bg_image_layer_path = ctx->cached_bg_image_path;
-				ctx->cached_bg_image_layer_w = srcWi;
-				ctx->cached_bg_image_layer_h = srcHi;
-				ctx->cached_bg_image_layer_opacity = s.bg_opacity;
-				ctx->cached_bg_image_layer_valid = true;
 			}
-
-			TextureBrush bgBrush(ctx->cached_bg_image_layer.get(), WrapModeClamp);
-			g.FillPath(&bgBrush, &bgPath);
-		} else {
+		}
+		if (!bgLayerOk) {
 			SolidBrush bgBrush(ObsColorToGdipWithAlpha(s.bg_color, s.bg_opacity));
 			g.FillPath(&bgBrush, &bgPath);
 		}
@@ -2123,50 +2211,88 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 
 	bool showArt = !s.hide_album_art;
 
+	auto marginForRow = [&](int y0, int y1) {
+		return std::max(PAD, RoundedRectCornerInset(cardW, cardH, s.background_corner_radius, y0, y1));
+	};
+
 	if (s.vertical_layout) {
 		constexpr int GAP_ART_TEXT = 14;
 		constexpr int GAP_TEXT_VU = VU_GAP_BEFORE_TEXT;
 
-		int textW = cardW - PAD * 2;
-		if (textW < MIN_TEXT_W)
-			textW = MIN_TEXT_W;
-		int textX = PAD;
 		int textTop;
+		int vuReserved = s.vu_meter_enabled ? (GAP_TEXT_VU + s.vu_height) : 0;
 
 		if (showArt) {
-			int maxArtByWidth = cardW - PAD * 2;
-			if (maxArtByWidth < MIN_ART_SIZE)
-				maxArtByWidth = MIN_ART_SIZE;
+			int extra = GAP_ART_TEXT + blockH + vuReserved;
+			int heightCap = cardH - PAD * 2 - extra;
+			if (heightCap < MIN_ART_SIZE)
+				heightCap = MIN_ART_SIZE;
 
-			int reservedNonArt = PAD * 2 + GAP_ART_TEXT + blockH + (s.vu_meter_enabled ? (GAP_TEXT_VU + s.vu_height) : 0);
-			artSize = cardH - reservedNonArt;
-			if (artSize > maxArtByWidth)
-				artSize = maxArtByWidth;
-			if (artSize < MIN_ART_SIZE)
-				artSize = MIN_ART_SIZE;
+			auto widthCapForArtSize = [&](int size) {
+				int totalContentH = size + extra;
+				int groupTop = (cardH - totalContentH) / 2;
+				if (groupTop < PAD)
+					groupTop = PAD;
+				int margin = marginForRow(groupTop, groupTop + size);
+				return cardW - margin * 2;
+			};
+
+			int lo = MIN_ART_SIZE, hi = heightCap;
+			int best = lo;
+			while (lo <= hi) {
+				int mid = lo + (hi - lo) / 2;
+				if (mid <= widthCapForArtSize(mid)) {
+					best = mid;
+					lo = mid + 1;
+				} else {
+					hi = mid - 1;
+				}
+			}
+			artSize = best;
+
+			int totalContentH = artSize + extra;
+			int artY = (cardH - totalContentH) / 2;
+			if (artY < PAD)
+				artY = PAD;
 
 			int artX = (cardW - artSize) / 2;
-			int artY = PAD;
 			artRect = Rect(artX, artY, artSize, artSize);
 
 			textTop = artY + artSize + GAP_ART_TEXT + s.text_offset_y;
 		} else {
 			artSize = 0;
 			artRect = Rect(0, 0, 0, 0);
-			textTop = PAD + s.text_offset_y;
+
+			int totalContentH = blockH + vuReserved;
+			int groupTop = (cardH - totalContentH) / 2;
+			if (groupTop < PAD)
+				groupTop = PAD;
+			textTop = groupTop + s.text_offset_y;
 		}
 
-		titleRect = RectF((REAL)textX, (REAL)textTop, (REAL)textW, (REAL)titleLineH);
-		artistRect = RectF((REAL)textX, (REAL)(textTop + titleLineH), (REAL)textW, (REAL)artistLineH);
+		int titleMargin = marginForRow(textTop, textTop + titleLineH);
+		int titleW = std::max(MIN_TEXT_W, cardW - titleMargin * 2);
+		titleRect = RectF((REAL)titleMargin, (REAL)textTop, (REAL)titleW, (REAL)titleLineH);
+
+		int artistY0 = textTop + titleLineH;
+		int artistMargin = marginForRow(artistY0, artistY0 + artistLineH);
+		int artistW = std::max(MIN_TEXT_W, cardW - artistMargin * 2);
+		artistRect = RectF((REAL)artistMargin, (REAL)artistY0, (REAL)artistW, (REAL)artistLineH);
 
 		if (s.show_progress_bar) {
 			int progressY = textTop + titleLineH + artistLineH + s.progress_bar_gap;
-			progressBarRect = Rect(textX, progressY, textW, s.progress_bar_height);
+			int progressMargin = marginForRow(progressY, progressY + s.progress_bar_height);
+			int progressAvailW = std::max(MIN_TEXT_W, cardW - progressMargin * 2);
+			int progressW = std::max(MIN_TEXT_W, (int)std::lround(progressAvailW * 0.85));
+			int progressX = progressMargin + (progressAvailW - progressW) / 2;
+			progressBarRect = Rect(progressX, progressY, progressW, s.progress_bar_height);
 		}
 
 		if (s.vu_meter_enabled) {
 			int vuTop = textTop + blockH + GAP_TEXT_VU;
-			int vuLeft = (cardW - s.vu_width) / 2;
+			int vuMargin = marginForRow(vuTop, vuTop + s.vu_height);
+			int vuAvailW = cardW - vuMargin * 2;
+			int vuLeft = vuMargin + std::max(0, (vuAvailW - s.vu_width) / 2);
 			vuBlockRect = Rect(vuLeft, vuTop, s.vu_width, s.vu_height);
 		}
 
@@ -2174,41 +2300,69 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 	} else {
 		int textX;
 
+		int topY = (cardH - blockH) / 2 + s.text_offset_y;
+		int rightMarginForArtSizing = marginForRow(topY, topY + blockH);
+
 		if (showArt) {
 			artSize = cardH - PAD * 2;
 			if (artSize < MIN_ART_SIZE)
 				artSize = MIN_ART_SIZE;
-			int maxArtForWidth = cardW - PAD * 2 - MIN_TEXT_W;
-			if (artSize > maxArtForWidth)
-				artSize = std::max(MIN_ART_SIZE, maxArtForWidth);
 
-			artRect = Rect(PAD, PAD, artSize, artSize);
-			textX = PAD + artSize + 14;
+			int maxArtByFraction = (int)(cardW * 0.50);
+			if (artSize > maxArtByFraction)
+				artSize = std::max(MIN_ART_SIZE, maxArtByFraction);
+
+			int artY = (cardH - artSize) / 2;
+			if (artY < PAD)
+				artY = PAD;
+
+			int artMargin = marginForRow(artY, artY + artSize);
+
+			int maxArtForWidth = cardW - artMargin - rightMarginForArtSizing - MIN_TEXT_W;
+			if (artSize > maxArtForWidth) {
+				artSize = std::max(MIN_ART_SIZE, maxArtForWidth);
+				artY = (cardH - artSize) / 2;
+				if (artY < PAD)
+					artY = PAD;
+				artMargin = marginForRow(artY, artY + artSize);
+			}
+
+			artRect = Rect(artMargin, artY, artSize, artSize);
+			textX = artMargin + artSize + 14;
 		} else {
 			artSize = 0;
 			artRect = Rect(0, 0, 0, 0);
 			textX = PAD;
 		}
 
-		int vuBlockWidthReserved = s.vu_meter_enabled ? (s.vu_width + VU_GAP_BEFORE_TEXT) : 0;
-		int textW = cardW - textX - PAD - vuBlockWidthReserved;
-		if (textW < MIN_TEXT_W)
-			textW = MIN_TEXT_W;
+		int vuLeftBound = cardW;
+		if (s.vu_meter_enabled) {
+			int vuTop = (cardH - s.vu_height) / 2;
+			int vuMargin = marginForRow(vuTop, vuTop + s.vu_height);
+			int vuRight = cardW - vuMargin;
+			int vuLeft = vuRight - s.vu_width;
+			vuBlockRect = Rect(vuLeft, vuTop, s.vu_width, s.vu_height);
+			vuLeftBound = vuLeft - VU_GAP_BEFORE_TEXT;
+		}
 
-		int topY = (cardH - blockH) / 2 + s.text_offset_y;
-		titleRect = RectF((REAL)textX, (REAL)topY, (REAL)textW, (REAL)titleLineH);
-		artistRect = RectF((REAL)textX, (REAL)(topY + titleLineH), (REAL)textW, (REAL)artistLineH);
+		auto rowWidth = [&](int y0, int y1) {
+			int margin = marginForRow(y0, y1);
+			int rightEdge = std::min(cardW - margin, vuLeftBound);
+			return std::max(MIN_TEXT_W, rightEdge - textX);
+		};
+
+		int titleW = rowWidth(topY, topY + titleLineH);
+		titleRect = RectF((REAL)textX, (REAL)topY, (REAL)titleW, (REAL)titleLineH);
+
+		int artistY0 = topY + titleLineH;
+		int artistW = rowWidth(artistY0, artistY0 + artistLineH);
+		artistRect = RectF((REAL)textX, (REAL)artistY0, (REAL)artistW, (REAL)artistLineH);
 
 		if (s.show_progress_bar) {
 			int progressY = topY + titleLineH + artistLineH + s.progress_bar_gap;
-			progressBarRect = Rect(textX, progressY, textW, s.progress_bar_height);
-		}
-
-		if (s.vu_meter_enabled) {
-			int vuRight = cardW - PAD;
-			int vuLeft = vuRight - s.vu_width;
-			int vuTop = (cardH - s.vu_height) / 2;
-			vuBlockRect = Rect(vuLeft, vuTop, s.vu_width, s.vu_height);
+			int progressAvailW = rowWidth(progressY, progressY + s.progress_bar_height);
+			int progressW = std::max(MIN_TEXT_W, (int)std::lround(progressAvailW * 0.85));
+			progressBarRect = Rect(textX, progressY, progressW, s.progress_bar_height);
 		}
 
 		centerText = false;
@@ -2222,13 +2376,49 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 		if (!artSource && s.show_goat_placeholder)
 			artSource = GetGoatImage(ctx);
 
-		if (artSource) {
-			TextureBrush artBrush(artSource, WrapModeClamp);
-			Matrix m;
-			m.Translate((REAL)artRect.X, (REAL)artRect.Y);
-			m.Scale((REAL)artRect.Width / (REAL)artSource->GetWidth(), (REAL)artRect.Height / (REAL)artSource->GetHeight());
-			artBrush.SetTransform(&m);
-			g.FillPath(&artBrush, &artClip);
+		if (artSource && artRect.Width > 0 && artRect.Height > 0) {
+			bool thumbOk = false;
+			try {
+				bool needThumbRebuild = !ctx->cached_art_thumb_layer_valid || !ctx->cached_art_thumb_layer || ctx->cached_art_thumb_layer_w != artRect.Width || ctx->cached_art_thumb_layer_h != artRect.Height || ctx->cached_art_thumb_layer_source != artSource;
+
+				if (needThumbRebuild) {
+					auto layer = std::make_unique<Bitmap>(artRect.Width, artRect.Height, PixelFormat32bppARGB);
+					if (layer->GetLastStatus() == Ok) {
+						Graphics gThumb(layer.get());
+						gThumb.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+						gThumb.SetSmoothingMode(SmoothingModeHighQuality);
+						gThumb.SetPixelOffsetMode(PixelOffsetModeHighQuality);
+						gThumb.SetCompositingQuality(CompositingQualityHighQuality);
+						gThumb.Clear(Color(0, 0, 0, 0));
+						gThumb.DrawImage(artSource, 0, 0, artRect.Width, artRect.Height);
+
+						ctx->cached_art_thumb_layer = std::move(layer);
+						ctx->cached_art_thumb_layer_w = artRect.Width;
+						ctx->cached_art_thumb_layer_h = artRect.Height;
+						ctx->cached_art_thumb_layer_source = artSource;
+						ctx->cached_art_thumb_layer_valid = true;
+					} else {
+						ctx->cached_art_thumb_layer_valid = false;
+					}
+				}
+
+				if (ctx->cached_art_thumb_layer_valid && ctx->cached_art_thumb_layer) {
+					TextureBrush artBrush(ctx->cached_art_thumb_layer.get(), WrapModeClamp);
+					Matrix m;
+					m.Translate((REAL)artRect.X, (REAL)artRect.Y);
+					artBrush.SetTransform(&m);
+					g.FillPath(&artBrush, &artClip);
+					thumbOk = true;
+				}
+			} catch (...) {
+				ctx->cached_art_thumb_layer_valid = false;
+				thumbOk = false;
+			}
+
+			if (!thumbOk) {
+				SolidBrush placeholder(Color(255, 55, 55, 60));
+				g.FillPath(&placeholder, &artClip);
+			}
 		} else {
 			SolidBrush placeholder(Color(255, 55, 55, 60));
 			g.FillPath(&placeholder, &artClip);
