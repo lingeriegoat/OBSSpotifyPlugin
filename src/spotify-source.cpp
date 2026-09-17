@@ -1193,11 +1193,16 @@ static bool ArtBytesDiffer(const std::vector<uint8_t> &cached, const uint8_t *im
 	return memcmp(cached.data(), image_data, (size_t)image_len) != 0;
 }
 
-static void UpdateCachedArt(spotify_source *ctx, const uint8_t *image_data, int image_len)
+static void InvalidateArtCache(spotify_source* ctx)
 {
 	ctx->cached_blurred_art_valid = false;
 	ctx->cached_art_bg_layer_valid = false;
-	ctx->cached_art_thumb_layer_valid = false;
+	ctx->cached_art_thumb_layer_valid = false;	
+}
+
+static void UpdateCachedArt(spotify_source *ctx, const uint8_t *image_data, int image_len)
+{
+	InvalidateArtCache(ctx);
 	ctx->cached_art_image.reset();
 	if (image_data == nullptr || image_len <= 0) {
 		ctx->last_art_bytes.clear();
@@ -1266,10 +1271,10 @@ static void DrawAlbumArtBackground(Graphics &g, spotify_source *ctx, Image *art,
 		RectF destRect(0.0f, 0.0f, (REAL)cardW, (REAL)cardH);
 		int pct = std::clamp(blurPct, 0, 100);
 
-		if (ctx->settings_dirty) {
-			ctx->cached_blurred_art_valid = false;
-			ctx->cached_art_bg_layer_valid = false;
-		}
+		//if (ctx->settings_dirty) {
+		//	ctx->cached_blurred_art_valid = false;
+		//	ctx->cached_art_bg_layer_valid = false;
+		//}
 
 		bool blurred = false;
 		if (pct > 0) {
@@ -1302,7 +1307,7 @@ static void DrawAlbumArtBackground(Graphics &g, spotify_source *ctx, Image *art,
 				blurred = true;
 		}
 
-		bool needRebuild = !ctx->cached_art_bg_layer_valid || !ctx->cached_art_bg_layer || ctx->cached_art_bg_layer_w != cardW || ctx->cached_art_bg_layer_h != cardH || ctx->cached_art_bg_layer_opacity != opacityPercent || ctx->cached_art_bg_layer_blurred != blurred;
+		bool needRebuild = !ctx->cached_art_bg_layer_valid;
 
 		if (needRebuild) {
 			auto layer = std::make_unique<Bitmap>(cardW, cardH, PixelFormat32bppARGB);
@@ -2138,7 +2143,7 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 
 			if (srcWi > 0 && srcHi > 0) {
 				try {
-					bool needRebuild = !ctx->cached_bg_image_layer_valid || !ctx->cached_bg_image_layer || ctx->cached_bg_image_layer_path != ctx->cached_bg_image_path || ctx->cached_bg_image_layer_w != srcWi || ctx->cached_bg_image_layer_h != srcHi || ctx->cached_bg_image_layer_opacity != s.bg_opacity;
+					bool needRebuild = !ctx->cached_bg_image_layer_valid;
 
 					if (needRebuild) {
 						ImageAttributes bgAttr;
@@ -2379,7 +2384,7 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 		if (artSource && artRect.Width > 0 && artRect.Height > 0) {
 			bool thumbOk = false;
 			try {
-				bool needThumbRebuild = !ctx->cached_art_thumb_layer_valid || !ctx->cached_art_thumb_layer || ctx->cached_art_thumb_layer_w != artRect.Width || ctx->cached_art_thumb_layer_h != artRect.Height || ctx->cached_art_thumb_layer_source != artSource;
+				bool needThumbRebuild = !ctx->cached_art_thumb_layer_valid;
 
 				if (needThumbRebuild) {
 					auto layer = std::make_unique<Bitmap>(artRect.Width, artRect.Height, PixelFormat32bppARGB);
@@ -2575,6 +2580,7 @@ static void poll_loop(spotify_source *ctx)
 		try {
 			if (!ctx->is_active) {
 				if (ctx->settings_dirty) {
+					InvalidateArtCache(ctx);
 					compose_bitmap(ctx, ctx->last_song, ctx->last_artist, snapshot_settings(ctx));
 					ctx->settings_dirty = false;
 				}
@@ -2705,6 +2711,7 @@ static void poll_loop(spotify_source *ctx)
 					ctx->artist_scroll_paused_at_start = true;
 					ctx->title_pause_start = now;
 					ctx->artist_pause_start = now;
+					InvalidateArtCache(ctx);
 					compose_bitmap(ctx, ctx->last_song, ctx->last_artist, snapshot_settings(ctx));
 				}
 			} else if (ctx->have_track) {
@@ -2717,14 +2724,12 @@ static void poll_loop(spotify_source *ctx)
 
 				if (std::chrono::steady_clock::now() - gap_start >= MISSING_SESSION_GRACE) {
 					ctx->last_song.clear();
-					ctx->last_artist.clear();
-					UpdateCachedArt(ctx, nullptr, 0);
+					ctx->last_artist.clear();					
 					ctx->song_duration_ticks = 0;
 					ctx->playback_position_ticks = 0;
 					ctx->max_displayed_position_ticks = 0;
 					ctx->have_track = false;
-					ctx->autohide_reference_time = std::chrono::steady_clock::now();
-					gap_active = false;
+					ctx->autohide_reference_time = std::chrono::steady_clock::now();					
 					ctx->title_scroll_px = 0.0;
 					ctx->artist_scroll_px = 0.0;
 					ctx->title_scroll_paused_at_end = false;
@@ -2733,9 +2738,12 @@ static void poll_loop(spotify_source *ctx)
 					ctx->artist_scroll_paused_at_start = true;
 					ctx->title_pause_start = std::chrono::steady_clock::now();
 					ctx->artist_pause_start = std::chrono::steady_clock::now();
+					gap_active = false;
+					UpdateCachedArt(ctx, nullptr, 0);
 					compose_bitmap(ctx, "", "", snapshot_settings(ctx));
 				}
 			} else if (ctx->settings_dirty) {
+				InvalidateArtCache(ctx);
 				compose_bitmap(ctx, ctx->last_song, ctx->last_artist, snapshot_settings(ctx));
 			}
 			ctx->settings_dirty = false;
