@@ -61,7 +61,7 @@ using namespace Gdiplus;
 namespace {
 
 constexpr UINT MAX_ART_DIMENSION = 16384; // sanity cap against a malformed/corrupt image header
-
+constexpr int64_t BACKWARD_THRESHOLD_TICKS = (int64_t)(12 * 1.0e7); // seconds converted to 100ns ticks
 constexpr int DEFAULT_SESSION_GRACE_SECONDS = 3;
 constexpr int POLL_INTERVAL_MS = 250; // how often we poll SMTC
 constexpr int DEFAULT_CARD_W = 380;
@@ -1086,11 +1086,15 @@ static void DrawProgressBar(Graphics &g, spotify_source *ctx, const AppearanceSe
 			elapsedTicks += (int64_t)(elapsedSeconds * 1.0e7); // 1 tick = 100ns
 		}
 
-		// Never let the displayed position move backward
-		if (elapsedTicks < ctx->max_displayed_position_ticks)
-			elapsedTicks = ctx->max_displayed_position_ticks;
-		else
+		if (elapsedTicks < ctx->max_displayed_position_ticks) {
+			if (ctx->max_displayed_position_ticks - elapsedTicks >= BACKWARD_THRESHOLD_TICKS) {
+				ctx->max_displayed_position_ticks = elapsedTicks;
+			} else {
+				elapsedTicks = ctx->max_displayed_position_ticks;
+			}
+		} else {
 			ctx->max_displayed_position_ticks = elapsedTicks;
+		}
 
 		frac = std::clamp((double)elapsedTicks / (double)ctx->song_duration_ticks, 0.0, 1.0);
 	}
