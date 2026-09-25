@@ -4112,9 +4112,9 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_color_alpha(props, "album_outline_color", obs_module_text("AlbumOutlineColor"));
 	obs_property_set_modified_callback(album_outline_enabled_prop, album_outline_enabled_modified);
 
-	obs_properties_add_int(props, "title_line_spacing", obs_module_text("TitleLineSpacing"), 0, 200, 1);
-	obs_properties_add_int(props, "artist_line_spacing", obs_module_text("ArtistLineSpacing"), 0, 200, 1);
-	obs_properties_add_int(props, "album_line_spacing", obs_module_text("AlbumLineSpacing"), 0, 200, 1);
+	obs_properties_add_int(props, "title_line_spacing", obs_module_text("TitleLineSpacing"), -50, 200, 1);
+	obs_properties_add_int(props, "artist_line_spacing", obs_module_text("ArtistLineSpacing"), -50, 200, 1);
+	obs_properties_add_int(props, "album_line_spacing", obs_module_text("AlbumLineSpacing"), -50, 200, 1);
 
 	obs_property_t *use_album_art_as_bg_prop = obs_properties_add_bool(props, "use_album_art_as_bg", obs_module_text("UseAlbumArtAsBackground"));
 	obs_properties_add_int(props, "album_art_bg_blur", obs_module_text("AlbumArtBackgroundBlur"), 0, 100, 1);
