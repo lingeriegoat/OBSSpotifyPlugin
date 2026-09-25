@@ -38,6 +38,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <winrt/Windows.Storage.Streams.h>
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -82,6 +83,13 @@ constexpr int DEFAULT_ARTIST_FONT_SIZE = 20;
 constexpr int DEFAULT_ARTIST_FONT_FLAGS = 0;
 constexpr const char *DEFAULT_ARTIST_FONT_FACE = "Segoe UI";
 constexpr const char *DEFAULT_ARTIST_FONT_STYLE = "Regular";
+constexpr int DEFAULT_ALBUM_FONT_SIZE = 20;
+constexpr int DEFAULT_ALBUM_FONT_FLAGS = 0;
+constexpr const char *DEFAULT_ALBUM_FONT_FACE = "Segoe UI";
+constexpr const char *DEFAULT_ALBUM_FONT_STYLE = "Regular";
+constexpr int DEFAULT_TITLE_LINE_SPACING = 10;
+constexpr int DEFAULT_ARTIST_LINE_SPACING = 8;
+constexpr int DEFAULT_ALBUM_LINE_SPACING = 8;
 constexpr int DEFAULT_COLOR_WHITE = 0xFFFFFFFF;
 constexpr int DEFAULT_COLOR_BLACK = 0xFF000000;
 constexpr int DEFAULT_COLOR_DARK_GREY = 0xFF5A5A5A;
@@ -214,6 +222,15 @@ std::wstring Utf8ToWide(const std::string &utf8)
 	std::wstring out(len - 1, L'\0');
 	MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, out.data(), len);
 	return out;
+}
+
+bool HasNonSpaceChar(const std::string &s)
+{
+	for (unsigned char c : s) {
+		if (!std::isspace(c))
+			return true;
+	}
+	return false;
 }
 
 // ---------------------------------------------------------------------
@@ -772,9 +789,17 @@ struct GlitchChannelBlock {
 	X(std::string, artist_font_style, DEFAULT_ARTIST_FONT_STYLE) \
 	X(int, artist_font_size, DEFAULT_ARTIST_FONT_SIZE) \
 	X(int, artist_font_flags, DEFAULT_ARTIST_FONT_FLAGS) \
+	X(long long, album_color, DEFAULT_COLOR_WHITE) \
+	X(std::string, album_font_face, DEFAULT_ALBUM_FONT_FACE) \
+	X(std::string, album_font_style, DEFAULT_ALBUM_FONT_STYLE) \
+	X(int, album_font_size, DEFAULT_ALBUM_FONT_SIZE) \
+	X(int, album_font_flags, DEFAULT_ALBUM_FONT_FLAGS) \
 	X(int, card_w, DEFAULT_CARD_W) \
 	X(int, card_h, DEFAULT_CARD_H) \
 	X(int, text_offset_y, 0) \
+	X(int, title_line_spacing, 10) \
+	X(int, artist_line_spacing, 8) \
+	X(int, album_line_spacing, 8) \
 	X(int, progress_bar_gap, DEFAULT_PROGRESS_BAR_GAP) \
 	X(int, progress_bar_height, DEFAULT_PROGRESS_BAR_HEIGHT) \
 	X(int, scroll_speed_ms, DEFAULT_SCROLL_SPEED_MS) \
@@ -789,6 +814,7 @@ struct GlitchChannelBlock {
 	X(bool, vu_horizontal, false) \
 	X(bool, vertical_layout, false) \
 	X(bool, show_album_name, false) \
+	X(bool, show_album_name_own_line, false) \
 	X(bool, show_song_artist_single_line, false) \
 	X(bool, show_goat_placeholder, true) \
 	X(bool, show_plugin_attribution, true) \
@@ -806,6 +832,9 @@ struct GlitchChannelBlock {
 	X(bool, artist_outline_enabled, false) \
 	X(int, artist_outline_size, DEFAULT_TEXT_OUTLINE_SIZE_PX) \
 	X(long long, artist_outline_color, DEFAULT_COLOR_BLACK) \
+	X(bool, album_outline_enabled, false) \
+	X(int, album_outline_size, DEFAULT_TEXT_OUTLINE_SIZE_PX) \
+	X(long long, album_outline_color, DEFAULT_COLOR_BLACK) \
 	X(std::string, card_style, "none") \
 	X(int, vhs_intensity, DEFAULT_VHS_INTENSITY) \
 	X(int, vhs_chroma_aberration, DEFAULT_VHS_CHROMA_ABERRATION) \
@@ -889,6 +918,7 @@ struct spotify_source {
 
 	std::string last_song;
 	std::string last_artist;
+	std::string last_album;
 	std::unique_ptr<Image> cached_art_image;
 	std::vector<uint8_t> last_art_bytes;
 	bool have_track = false;
@@ -911,26 +941,36 @@ struct spotify_source {
 
 	bool title_needs_scroll = false;
 	bool artist_needs_scroll = false;
+	bool album_needs_scroll = false;
 	double title_scroll_px = 0.0;
 	double artist_scroll_px = 0.0;
+	double album_scroll_px = 0.0;
 	double title_avg_char_px = 8.0;
 	double artist_avg_char_px = 7.0;
+	double album_avg_char_px = 7.0;
 	double title_scroll_max_px = 0.0;
 	double artist_scroll_max_px = 0.0;
+	double album_scroll_max_px = 0.0;
 	bool title_scroll_paused_at_end = false;
 
 	std::string cached_wtitle_src;
 	std::wstring cached_wtitle;
 	std::string cached_wartist_src;
 	std::wstring cached_wartist;
+	std::string cached_walbum_src;
+	std::wstring cached_walbum;
 
 	ScrollMeasureCache title_measure_cache;
 	ScrollMeasureCache artist_measure_cache;
+	ScrollMeasureCache album_measure_cache;
 	bool artist_scroll_paused_at_end = false;
+	bool album_scroll_paused_at_end = false;
 	bool title_scroll_paused_at_start = false;
 	bool artist_scroll_paused_at_start = false;
+	bool album_scroll_paused_at_start = false;
 	std::chrono::steady_clock::time_point title_pause_start{};
 	std::chrono::steady_clock::time_point artist_pause_start{};
+	std::chrono::steady_clock::time_point album_pause_start{};
 	std::chrono::steady_clock::time_point last_scroll_tick{};
 
 	double vu_bar_frac[VU_MAX_BAR_COUNT] = {0.0}; // 0..1, scaled to pixel height/length at draw time
@@ -1006,6 +1046,7 @@ struct spotify_source {
 
 	CachedFont title_font_cache;
 	CachedFont artist_font_cache;
+	CachedFont album_font_cache;
 
 	bool transition_active = false;
 	std::vector<uint8_t> transition_from_pixels;
@@ -1197,11 +1238,11 @@ static bool ArtBytesDiffer(const std::vector<uint8_t> &cached, const uint8_t *im
 	return memcmp(cached.data(), image_data, (size_t)image_len) != 0;
 }
 
-static void InvalidateArtCache(spotify_source* ctx)
+static void InvalidateArtCache(spotify_source *ctx)
 {
 	ctx->cached_blurred_art_valid = false;
 	ctx->cached_art_bg_layer_valid = false;
-	ctx->cached_art_thumb_layer_valid = false;	
+	ctx->cached_art_thumb_layer_valid = false;
 }
 
 static void UpdateCachedArt(spotify_source *ctx, const uint8_t *image_data, int image_len)
@@ -1226,7 +1267,7 @@ static void UpdateCachedArt(spotify_source *ctx, const uint8_t *image_data, int 
 
 		UINT w = img->GetWidth();
 		UINT h = img->GetHeight();
-		
+
 		if (w == 0 || h == 0 || w > MAX_ART_DIMENSION || h > MAX_ART_DIMENSION)
 			return;
 
@@ -2102,7 +2143,7 @@ static void DrawGlitchOverlay(Graphics &g, Bitmap &card, spotify_source *ctx, Gr
 	g.SetClip(&savedClip);
 }
 
-static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, const std::string &artist, const AppearanceSettings &s)
+static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, const std::string &artist, const std::string &album, const AppearanceSettings &s)
 {
 	const int cardW = std::max(s.card_w, 50);
 	const int cardH = std::max(s.card_h, 30);
@@ -2194,26 +2235,36 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 
 	int titleSize = s.title_font_size > 0 ? s.title_font_size : DEFAULT_TITLE_FONT_SIZE;
 	int artistSize = s.artist_font_size > 0 ? s.artist_font_size : DEFAULT_ARTIST_FONT_SIZE;
+	int albumSize = s.album_font_size > 0 ? s.album_font_size : DEFAULT_ALBUM_FONT_SIZE;
 
 	Font &titleFont = *EnsureFont(ctx->title_font_cache, s.title_font_face, s.title_font_style, titleSize, s.title_font_flags);
 	Font &artistFont = *EnsureFont(ctx->artist_font_cache, s.artist_font_face, s.artist_font_style, artistSize, s.artist_font_flags);
+	Font &albumFont = *EnsureFont(ctx->album_font_cache, s.album_font_face, s.album_font_style, albumSize, s.album_font_flags);
 
 	Color titleColor = ObsColorToGdip(s.title_color);
 	Color artistColor = ObsColorToGdip(s.artist_color);
+	Color albumColor = ObsColorToGdip(s.album_color);
 	SolidBrush titleBrush(titleColor);
 	SolidBrush artistBrush(artistColor);
+	SolidBrush albumBrush(albumColor);
 
 	Color titleOutlineColor = ObsColorToGdip(s.title_outline_color);
 	Color artistOutlineColor = ObsColorToGdip(s.artist_outline_color);
+	Color albumOutlineColor = ObsColorToGdip(s.album_outline_color);
 
-	int titleLineH = titleSize + 10;
-	int artistLineH = s.show_song_artist_single_line ? 0 : (artistSize + 8);
+	bool useAttribution = !ctx->have_track && s.show_plugin_attribution;
+	bool albumOwnLineActive = s.show_album_name && s.show_album_name_own_line;
+	bool hasAlbum = albumOwnLineActive && !useAttribution && HasNonSpaceChar(album);
+
+	int titleLineH = titleSize + s.title_line_spacing;
+	int artistLineH = s.show_song_artist_single_line ? 0 : (artistSize + s.artist_line_spacing);
+	int albumLineH = hasAlbum ? (albumSize + s.album_line_spacing) : 0;
 	int progressH = s.show_progress_bar ? (s.progress_bar_gap + s.progress_bar_height) : 0;
-	int blockH = titleLineH + artistLineH + progressH;
+	int blockH = titleLineH + artistLineH + albumLineH + progressH;
 
 	int artSize = 0;
 	Rect artRect;
-	RectF titleRect, artistRect;
+	RectF titleRect, artistRect, albumRect;
 	bool centerText = false;
 	Rect vuBlockRect(0, 0, 0, 0);
 	Rect progressBarRect(0, 0, 0, 0);
@@ -2288,8 +2339,13 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 		int artistW = std::max(MIN_TEXT_W, cardW - artistMargin * 2);
 		artistRect = RectF((REAL)artistMargin, (REAL)artistY0, (REAL)artistW, (REAL)artistLineH);
 
+		int albumY0 = textTop + titleLineH + artistLineH;
+		int albumMargin = marginForRow(albumY0, albumY0 + albumLineH);
+		int albumW = std::max(MIN_TEXT_W, cardW - albumMargin * 2);
+		albumRect = RectF((REAL)albumMargin, (REAL)albumY0, (REAL)albumW, (REAL)albumLineH);
+
 		if (s.show_progress_bar) {
-			int progressY = textTop + titleLineH + artistLineH + s.progress_bar_gap;
+			int progressY = textTop + titleLineH + artistLineH + albumLineH + s.progress_bar_gap;
 			int progressMargin = marginForRow(progressY, progressY + s.progress_bar_height);
 			int progressAvailW = std::max(MIN_TEXT_W, cardW - progressMargin * 2);
 			int progressW = std::max(MIN_TEXT_W, (int)std::lround(progressAvailW * 0.85));
@@ -2367,8 +2423,12 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 		int artistW = rowWidth(artistY0, artistY0 + artistLineH);
 		artistRect = RectF((REAL)textX, (REAL)artistY0, (REAL)artistW, (REAL)artistLineH);
 
+		int albumY0 = topY + titleLineH + artistLineH;
+		int albumW = rowWidth(albumY0, albumY0 + albumLineH);
+		albumRect = RectF((REAL)textX, (REAL)albumY0, (REAL)albumW, (REAL)albumLineH);
+
 		if (s.show_progress_bar) {
-			int progressY = topY + titleLineH + artistLineH + s.progress_bar_gap;
+			int progressY = topY + titleLineH + artistLineH + albumLineH + s.progress_bar_gap;
 			int progressAvailW = rowWidth(progressY, progressY + s.progress_bar_height);
 			int progressW = std::max(MIN_TEXT_W, (int)std::lround(progressAvailW * 0.85));
 			progressBarRect = Rect(textX, progressY, progressW, s.progress_bar_height);
@@ -2437,9 +2497,10 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 	// text (shared drawing code)
 	static const std::string kAttributionTitle = "NowPlayingWidget by lingeriegoat";
 	static const std::string kAttributionArtist = "Play some music to get started";
-	bool useAttribution = !ctx->have_track && s.show_plugin_attribution;
 	const std::string &displayTitle = useAttribution ? kAttributionTitle : title;
 	const std::string &displayArtist = useAttribution ? kAttributionArtist : artist;
+	const std::string emptyAlbum;
+	const std::string &displayAlbum = hasAlbum ? album : emptyAlbum;
 
 	if (ctx->cached_wtitle_src != displayTitle) {
 		ctx->cached_wtitle_src = displayTitle;
@@ -2449,20 +2510,37 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 		ctx->cached_wartist_src = displayArtist;
 		ctx->cached_wartist = Utf8ToWide(displayArtist);
 	}
+	if (ctx->cached_walbum_src != displayAlbum) {
+		ctx->cached_walbum_src = displayAlbum;
+		ctx->cached_walbum = Utf8ToWide(displayAlbum);
+	}
 	const std::wstring &wtitle = ctx->cached_wtitle;
 	const std::wstring &wartist = ctx->cached_wartist;
+	const std::wstring &walbum = ctx->cached_walbum;
 
-	bool titleScroll = false, artistScroll = false;
-	double titleAvgChar = ctx->title_avg_char_px, artistAvgChar = ctx->artist_avg_char_px;
-	double titleMaxOffset = ctx->title_scroll_max_px, artistMaxOffset = ctx->artist_scroll_max_px;
+	bool titleScroll = false;
+	bool artistScroll = false;
+	bool albumScroll = false;
+	double titleAvgChar = ctx->title_avg_char_px;
+	double artistAvgChar = ctx->artist_avg_char_px;
+	double albumAvgChar = ctx->album_avg_char_px;
+	double titleMaxOffset = ctx->title_scroll_max_px;
+	double artistMaxOffset = ctx->artist_scroll_max_px;
+	double albumMaxOffset = ctx->album_scroll_max_px;
 	DrawScrollableLine(g, wtitle, titleFont, titleBrush, titleRect, ctx->title_scroll_px, centerText, s.title_outline_enabled, (float)s.title_outline_size, titleOutlineColor, &titleScroll, &titleAvgChar, &titleMaxOffset, &ctx->title_measure_cache);
 	DrawScrollableLine(g, wartist, artistFont, artistBrush, artistRect, ctx->artist_scroll_px, centerText, s.artist_outline_enabled, (float)s.artist_outline_size, artistOutlineColor, &artistScroll, &artistAvgChar, &artistMaxOffset, &ctx->artist_measure_cache);
+	if (hasAlbum) {
+		DrawScrollableLine(g, walbum, albumFont, albumBrush, albumRect, ctx->album_scroll_px, centerText, s.album_outline_enabled, (float)s.album_outline_size, albumOutlineColor, &albumScroll, &albumAvgChar, &albumMaxOffset, &ctx->album_measure_cache);
+	}
 	ctx->title_needs_scroll = titleScroll;
 	ctx->artist_needs_scroll = artistScroll;
+	ctx->album_needs_scroll = albumScroll;
 	ctx->title_avg_char_px = titleAvgChar;
 	ctx->artist_avg_char_px = artistAvgChar;
+	ctx->album_avg_char_px = albumAvgChar;
 	ctx->title_scroll_max_px = titleMaxOffset;
 	ctx->artist_scroll_max_px = artistMaxOffset;
+	ctx->album_scroll_max_px = albumMaxOffset;
 
 	DrawVuMeter(g, ctx, s, vuBlockRect);
 
@@ -2501,10 +2579,10 @@ static void compose_bitmap_impl(spotify_source *ctx, const std::string &title, c
 	ctx->new_bitmap_ready = true;
 }
 
-static void compose_bitmap(spotify_source *ctx, const std::string &title, const std::string &artist, const AppearanceSettings &s)
+static void compose_bitmap(spotify_source *ctx, const std::string &title, const std::string &artist, const std::string &album, const AppearanceSettings &s)
 {
 	__try {
-		compose_bitmap_impl(ctx, title, artist, s);
+		compose_bitmap_impl(ctx, title, artist, album, s);
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		if (GetExceptionCode() == EXCEPTION_STACK_OVERFLOW) {
 			_resetstkoflw();
@@ -2585,7 +2663,7 @@ static void poll_loop(spotify_source *ctx)
 			if (!ctx->is_active) {
 				if (ctx->settings_dirty) {
 					InvalidateArtCache(ctx);
-					compose_bitmap(ctx, ctx->last_song, ctx->last_artist, snapshot_settings(ctx));
+					compose_bitmap(ctx, ctx->last_song, ctx->last_artist, ctx->last_album, snapshot_settings(ctx));
 					ctx->settings_dirty = false;
 				}
 				std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -2607,18 +2685,23 @@ static void poll_loop(spotify_source *ctx)
 
 			std::string title = has ? std::string(info.SongName) : std::string();
 			std::string artist = has ? std::string(info.ArtistName) : std::string();
+			std::string album = has ? std::string(info.AlbumName) : std::string();
 
 			bool show_album_name;
+			bool album_own_line;
 			bool single_line;
 			{
 				std::lock_guard<std::mutex> lock(ctx->settings_mutex);
 				show_album_name = ctx->show_album_name;
+				album_own_line = ctx->show_album_name_own_line;
 				single_line = ctx->show_song_artist_single_line;
 			}
 
+			bool album_own_line_active = show_album_name && album_own_line;
+
 			std::string albumSuffix;
-			if (show_album_name) {
-				albumSuffix = " - " + std::string(info.AlbumName);
+			if (show_album_name && !album_own_line_active) {
+				albumSuffix = " - " + album;
 			}
 
 			if (single_line) {
@@ -2628,7 +2711,7 @@ static void poll_loop(spotify_source *ctx)
 				artist.append(albumSuffix);
 			}
 
-			bool track_changed = (has != ctx->have_track) || (title != ctx->last_song) || (artist != ctx->last_artist);
+			bool track_changed = (has != ctx->have_track) || (title != ctx->last_song) || (artist != ctx->last_artist) || (album != ctx->last_album);
 
 			if (has) {
 				gap_active = false;
@@ -2651,18 +2734,23 @@ static void poll_loop(spotify_source *ctx)
 
 					ctx->last_song = title;
 					ctx->last_artist = artist;
+					ctx->last_album = album;
 					ctx->have_track = true;
 					ctx->max_displayed_position_ticks = 0;
 					ctx->autohide_reference_time = now;
 
 					ctx->title_scroll_px = 0.0; // New track -- restart the marquee from the beginning.
 					ctx->artist_scroll_px = 0.0;
+					ctx->album_scroll_px = 0.0;
 					ctx->title_scroll_paused_at_end = false;
 					ctx->artist_scroll_paused_at_end = false;
+					ctx->album_scroll_paused_at_end = false;
 					ctx->title_scroll_paused_at_start = true;
 					ctx->artist_scroll_paused_at_start = true;
+					ctx->album_scroll_paused_at_start = true;
 					ctx->title_pause_start = now;
 					ctx->artist_pause_start = now;
+					ctx->album_pause_start = now;
 					ctx->last_scroll_tick = std::chrono::steady_clock::now();
 
 					AppearanceSettings snap = snapshot_settings(ctx);
@@ -2676,7 +2764,7 @@ static void poll_loop(spotify_source *ctx)
 						fromH = ctx->pending_h;
 					}
 
-					compose_bitmap(ctx, title, artist, snap);
+					compose_bitmap(ctx, title, artist, album, snap);
 
 					if (snap.track_change_animation_enabled && !fromPixels.empty()) {
 						std::vector<uint8_t> toPixels;
@@ -2705,18 +2793,22 @@ static void poll_loop(spotify_source *ctx)
 					}
 				} else if (ArtBytesDiffer(ctx->last_art_bytes, info.ImageData, info.ImageLength)) {
 					UpdateCachedArt(ctx, info.ImageData, info.ImageLength);
-					compose_bitmap(ctx, ctx->last_song, ctx->last_artist, snapshot_settings(ctx));
+					compose_bitmap(ctx, ctx->last_song, ctx->last_artist, ctx->last_album, snapshot_settings(ctx));
 				} else if (ctx->settings_dirty) {
 					ctx->title_scroll_px = 0.0;
 					ctx->artist_scroll_px = 0.0;
+					ctx->album_scroll_px = 0.0;
 					ctx->title_scroll_paused_at_end = false;
 					ctx->artist_scroll_paused_at_end = false;
+					ctx->album_scroll_paused_at_end = false;
 					ctx->title_scroll_paused_at_start = true;
 					ctx->artist_scroll_paused_at_start = true;
+					ctx->album_scroll_paused_at_start = true;
 					ctx->title_pause_start = now;
 					ctx->artist_pause_start = now;
+					ctx->album_pause_start = now;
 					InvalidateArtCache(ctx);
-					compose_bitmap(ctx, ctx->last_song, ctx->last_artist, snapshot_settings(ctx));
+					compose_bitmap(ctx, ctx->last_song, ctx->last_artist, ctx->last_album, snapshot_settings(ctx));
 				}
 			} else if (ctx->have_track) {
 				ctx->is_playing = false;
@@ -2728,27 +2820,32 @@ static void poll_loop(spotify_source *ctx)
 
 				if (std::chrono::steady_clock::now() - gap_start >= MISSING_SESSION_GRACE) {
 					ctx->last_song.clear();
-					ctx->last_artist.clear();					
+					ctx->last_artist.clear();
+					ctx->last_album.clear();
 					ctx->song_duration_ticks = 0;
 					ctx->playback_position_ticks = 0;
 					ctx->max_displayed_position_ticks = 0;
 					ctx->have_track = false;
-					ctx->autohide_reference_time = std::chrono::steady_clock::now();					
+					ctx->autohide_reference_time = std::chrono::steady_clock::now();
 					ctx->title_scroll_px = 0.0;
 					ctx->artist_scroll_px = 0.0;
+					ctx->album_scroll_px = 0.0;
 					ctx->title_scroll_paused_at_end = false;
 					ctx->artist_scroll_paused_at_end = false;
+					ctx->album_scroll_paused_at_end = false;
 					ctx->title_scroll_paused_at_start = true;
 					ctx->artist_scroll_paused_at_start = true;
+					ctx->album_scroll_paused_at_start = true;
 					ctx->title_pause_start = std::chrono::steady_clock::now();
 					ctx->artist_pause_start = std::chrono::steady_clock::now();
+					ctx->album_pause_start = std::chrono::steady_clock::now();
 					gap_active = false;
 					UpdateCachedArt(ctx, nullptr, 0);
-					compose_bitmap(ctx, "", "", snapshot_settings(ctx));
+					compose_bitmap(ctx, "", "", "", snapshot_settings(ctx));
 				}
 			} else if (ctx->settings_dirty) {
 				InvalidateArtCache(ctx);
-				compose_bitmap(ctx, ctx->last_song, ctx->last_artist, snapshot_settings(ctx));
+				compose_bitmap(ctx, ctx->last_song, ctx->last_artist, ctx->last_album, snapshot_settings(ctx));
 			}
 			ctx->settings_dirty = false;
 
@@ -2790,7 +2887,7 @@ static void poll_loop(spotify_source *ctx)
 					} else {
 						bool needCompose = autohideChanged;
 
-						if (ctx->title_needs_scroll || ctx->artist_needs_scroll) {
+						if (ctx->title_needs_scroll || ctx->artist_needs_scroll || ctx->album_needs_scroll) {
 							if (now - ctx->last_scroll_tick >= std::chrono::milliseconds(s.scroll_speed_ms)) {
 								ctx->last_scroll_tick = now;
 
@@ -2839,6 +2936,31 @@ static void poll_loop(spotify_source *ctx)
 											ctx->artist_scroll_px = ctx->artist_scroll_max_px;
 											ctx->artist_scroll_paused_at_end = true;
 											ctx->artist_pause_start = now;
+										}
+										needCompose = true;
+									}
+								}
+
+								if (ctx->album_needs_scroll) {
+									if (ctx->album_scroll_paused_at_end || ctx->album_scroll_paused_at_start) {
+										if (now - ctx->album_pause_start >= SCROLL_END_PAUSE) {
+											if (ctx->album_scroll_paused_at_end) {
+												ctx->album_scroll_px = 0.0;
+												ctx->album_scroll_paused_at_end = false;
+												ctx->album_scroll_paused_at_start = true;
+												ctx->album_pause_start = now;
+												needCompose = true;
+											} else {
+												ctx->album_scroll_paused_at_start = false;
+												needCompose = true;
+											}
+										}
+									} else {
+										ctx->album_scroll_px += ctx->album_avg_char_px;
+										if (ctx->album_scroll_px >= ctx->album_scroll_max_px) {
+											ctx->album_scroll_px = ctx->album_scroll_max_px;
+											ctx->album_scroll_paused_at_end = true;
+											ctx->album_pause_start = now;
 										}
 										needCompose = true;
 									}
@@ -3035,7 +3157,7 @@ static void poll_loop(spotify_source *ctx)
 						}
 
 						if (needCompose) {
-							compose_bitmap(ctx, ctx->last_song, ctx->last_artist, s);
+							compose_bitmap(ctx, ctx->last_song, ctx->last_artist, ctx->last_album, s);
 						}
 					}
 				}
@@ -3154,11 +3276,98 @@ static const char *spotify_source_get_name(void *)
 // ---------------------------------------------------------------------
 
 static const char *const kSettingsIntKeys[] = {
-	"title_color", "artist_color", "bg_color", "bg_opacity", "background_corner_radius", "album_art_corner_radius", "card_width", "card_height", "text_offset_y", "progress_bar_gap", "progress_bar_height", "scroll_speed_ms", "vu_color", "vu_update_ms", "vu_randomness", "vu_width", "vu_height", "vu_bar_count", "progress_fill_color", "progress_bg_color", "autohide_after_s", "title_outline_size", "title_outline_color", "artist_outline_size", "artist_outline_color", "album_art_bg_blur", "vhs_intensity", "vhs_chroma_aberration", "vhs_smear_amount", "vhs_scanline_spacing", "vhs_scanline_intensity", "vhs_tracking_min_interval_s", "vhs_tracking_max_interval_s", "vhs_tracking_line_min_count", "vhs_tracking_line_max_count", "vhs_tracking_line_gap", "vhs_tracking_min_thickness", "vhs_tracking_max_thickness", "vhs_glitch_chance_pct", "vhs_glitch_max_bands", "vhs_grain_amount", "eightmm_intensity", "eightmm_light_leak_intensity", "eightmm_scratch_intensity", "eightmm_dust_intensity", "eightmm_scratch_max_count", "eightmm_dust_max_count", "duotone_shadow_color", "duotone_highlight_color", "duotone_intensity", "bw_desaturation", "bw_contrast", "glitch_intensity", "glitch_pixel_sort_chance", "glitch_pixel_sort_max_rows", "glitch_pixel_sort_threshold", "glitch_tear_chance", "glitch_tear_max_count", "glitch_tear_max_height", "glitch_tear_max_offset", "glitch_tear_duplicate_chance", "glitch_channel_block_chance", "glitch_channel_block_max_count", "glitch_channel_block_max_size", "glitch_channel_block_max_offset",
+	"title_color", 
+	"artist_color", 
+	"album_color", 
+	"bg_color", 
+	"bg_opacity", 
+	"background_corner_radius", 
+	"album_art_corner_radius", 
+	"card_width", 
+	"card_height", 
+	"text_offset_y", 
+	"title_line_spacing", 
+	"artist_line_spacing", 
+	"album_line_spacing", 
+	"progress_bar_gap", 
+	"progress_bar_height", 
+	"scroll_speed_ms", 
+	"vu_color", 
+	"vu_update_ms", 
+	"vu_randomness", 
+	"vu_width", 
+	"vu_height", 
+	"vu_bar_count", 
+	"progress_fill_color", 
+	"progress_bg_color", 
+	"autohide_after_s", 
+	"title_outline_size", 
+	"title_outline_color", 
+	"artist_outline_size", 
+	"artist_outline_color", 
+	"album_outline_size", 
+	"album_outline_color", 
+	"album_art_bg_blur", 
+	"vhs_intensity", 
+	"vhs_chroma_aberration", 
+	"vhs_smear_amount", 
+	"vhs_scanline_spacing", 
+	"vhs_scanline_intensity", 
+	"vhs_tracking_min_interval_s", 
+	"vhs_tracking_max_interval_s", 
+	"vhs_tracking_line_min_count", 
+	"vhs_tracking_line_max_count", 
+	"vhs_tracking_line_gap", 
+	"vhs_tracking_min_thickness", 
+	"vhs_tracking_max_thickness", 
+	"vhs_glitch_chance_pct", 
+	"vhs_glitch_max_bands", 
+	"vhs_grain_amount", 
+	"eightmm_intensity", 
+	"eightmm_light_leak_intensity", 
+	"eightmm_scratch_intensity", 
+	"eightmm_dust_intensity", 
+	"eightmm_scratch_max_count", 
+	"eightmm_dust_max_count", 
+	"duotone_shadow_color", 
+	"duotone_highlight_color", 
+	"duotone_intensity", 
+	"bw_desaturation", 
+	"bw_contrast", 
+	"glitch_intensity", 
+	"glitch_pixel_sort_chance", 
+	"glitch_pixel_sort_max_rows", 
+	"glitch_pixel_sort_threshold", 
+	"glitch_tear_chance", 
+	"glitch_tear_max_count", 
+	"glitch_tear_max_height", 
+	"glitch_tear_max_offset", 
+	"glitch_tear_duplicate_chance", 
+	"glitch_channel_block_chance", 
+	"glitch_channel_block_max_count", 
+	"glitch_channel_block_max_size", 
+	"glitch_channel_block_max_offset",
 };
 
 static const char *const kSettingsBoolKeys[] = {
-	"use_bg_image", "vu_meter_enabled", "vu_horizontal", "vertical_layout", "show_album_name", "show_song_artist_single_line", "show_goat_placeholder", "show_plugin_attribution", "hide_album_art", "show_progress_bar", "track_change_animation_enabled", "autohide_enabled", "autohide_when_not_playing", "title_outline_enabled", "artist_outline_enabled", "use_album_art_as_bg",
+	"use_bg_image", 
+	"vu_meter_enabled", 
+	"vu_horizontal", 
+	"vertical_layout", 
+	"show_album_name", 
+	"show_album_name_own_line", 
+	"show_song_artist_single_line", 
+	"show_goat_placeholder", 
+	"show_plugin_attribution", 
+	"hide_album_art", 
+	"show_progress_bar", 
+	"track_change_animation_enabled", 
+	"autohide_enabled", 
+	"autohide_when_not_playing", 
+	"title_outline_enabled", 
+	"artist_outline_enabled", 
+	"album_outline_enabled", 
+	"use_album_art_as_bg",
 };
 
 static const char *const kSettingsStringKeys[] = {
@@ -3168,12 +3377,25 @@ static const char *const kSettingsStringKeys[] = {
 };
 
 static const char *const kSettingsDoubleKeys[] = {
-	"vhs_smear_burst_min_s", "vhs_smear_burst_max_s", "vhs_smear_min_interval_s", "vhs_smear_max_interval_s", "vhs_tracking_jitter_min", "vhs_tracking_jitter_max", "vhs_tracking_brighten", "eightmm_vignette_strength", "eightmm_warmth", "eightmm_light_leak_alpha", "eightmm_weave_px", "eightmm_flicker", "bw_vignette_strength",
+	"vhs_smear_burst_min_s", 
+	"vhs_smear_burst_max_s", 
+	"vhs_smear_min_interval_s", 
+	"vhs_smear_max_interval_s", 
+	"vhs_tracking_jitter_min", 
+	"vhs_tracking_jitter_max", 
+	"vhs_tracking_brighten", 
+	"eightmm_vignette_strength", 
+	"eightmm_warmth", 
+	"eightmm_light_leak_alpha", 
+	"eightmm_weave_px", 
+	"eightmm_flicker", 
+	"bw_vignette_strength",
 };
 
 static const char *const kSettingsObjKeys[] = {
 	"title_font",
 	"artist_font",
+	"album_font",
 };
 
 static void export_known_settings(obs_data_t *settings, obs_data_t *out)
@@ -3271,6 +3493,7 @@ static void apply_settings(spotify_source *ctx, obs_data_t *settings)
 	std::lock_guard<std::mutex> lock(ctx->settings_mutex);
 	ctx->title_color = obs_data_get_int(settings, "title_color");
 	ctx->artist_color = obs_data_get_int(settings, "artist_color");
+	ctx->album_color = obs_data_get_int(settings, "album_color");
 
 	ctx->title_outline_enabled = obs_data_get_bool(settings, "title_outline_enabled");
 	ctx->title_outline_size = (int)obs_data_get_int(settings, "title_outline_size");
@@ -3281,6 +3504,11 @@ static void apply_settings(spotify_source *ctx, obs_data_t *settings)
 	ctx->artist_outline_size = (int)obs_data_get_int(settings, "artist_outline_size");
 	ctx->artist_outline_size = std::clamp(ctx->artist_outline_size, 1, 50);
 	ctx->artist_outline_color = obs_data_get_int(settings, "artist_outline_color");
+
+	ctx->album_outline_enabled = obs_data_get_bool(settings, "album_outline_enabled");
+	ctx->album_outline_size = (int)obs_data_get_int(settings, "album_outline_size");
+	ctx->album_outline_size = std::clamp(ctx->album_outline_size, 1, 50);
+	ctx->album_outline_color = obs_data_get_int(settings, "album_outline_color");
 
 	const char *card_style = obs_data_get_string(settings, "card_style");
 	ctx->card_style = card_style ? card_style : "none";
@@ -3383,6 +3611,10 @@ static void apply_settings(spotify_source *ctx, obs_data_t *settings)
 	ctx->text_offset_y = (int)obs_data_get_int(settings, "text_offset_y");
 	ctx->text_offset_y = std::clamp(ctx->text_offset_y, -1000, 1000);
 
+	ctx->title_line_spacing = (int)obs_data_get_int(settings, "title_line_spacing");
+	ctx->artist_line_spacing = (int)obs_data_get_int(settings, "artist_line_spacing");
+	ctx->album_line_spacing = (int)obs_data_get_int(settings, "album_line_spacing");
+
 	ctx->progress_bar_gap = (int)obs_data_get_int(settings, "progress_bar_gap");
 	ctx->progress_bar_gap = std::clamp(ctx->progress_bar_gap, -1000, 1000);
 
@@ -3415,6 +3647,7 @@ static void apply_settings(spotify_source *ctx, obs_data_t *settings)
 	ctx->vu_horizontal = obs_data_get_bool(settings, "vu_horizontal");
 	ctx->vertical_layout = obs_data_get_bool(settings, "vertical_layout");
 	ctx->show_album_name = obs_data_get_bool(settings, "show_album_name");
+	ctx->show_album_name_own_line = obs_data_get_bool(settings, "show_album_name_own_line");
 	ctx->show_song_artist_single_line = obs_data_get_bool(settings, "show_song_artist_single_line");
 	ctx->show_goat_placeholder = obs_data_get_bool(settings, "show_goat_placeholder");
 	ctx->show_plugin_attribution = obs_data_get_bool(settings, "show_plugin_attribution");
@@ -3460,6 +3693,20 @@ static void apply_settings(spotify_source *ctx, obs_data_t *settings)
 		ctx->artist_font_size = DEFAULT_ARTIST_FONT_SIZE;
 	}
 
+	obs_data_t *album_font_obj = obs_data_get_obj(settings, "album_font");
+	if (album_font_obj) {
+		const char *face = obs_data_get_string(album_font_obj, "face");
+		const char *style = obs_data_get_string(album_font_obj, "style");
+		ctx->album_font_face = (face && face[0]) ? face : "Segoe UI";
+		ctx->album_font_style = style ? style : "Regular";
+		ctx->album_font_size = (int)obs_data_get_int(album_font_obj, "size");
+		ctx->album_font_flags = (int)obs_data_get_int(album_font_obj, "flags");
+		obs_data_release(album_font_obj);
+	}
+	if (ctx->album_font_size <= 0) {
+		ctx->album_font_size = DEFAULT_ALBUM_FONT_SIZE;
+	}
+
 	ctx->settings_dirty = true;
 }
 
@@ -3480,6 +3727,7 @@ static void spotify_source_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, "enable_browser_media", DEFAULT_ENABLE_BROWSER_MEDIA_SOURCES);
 	obs_data_set_default_int(settings, "title_color", DEFAULT_COLOR_WHITE);
 	obs_data_set_default_int(settings, "artist_color", DEFAULT_COLOR_WHITE);
+	obs_data_set_default_int(settings, "album_color", DEFAULT_COLOR_WHITE);
 
 	obs_data_set_default_bool(settings, "title_outline_enabled", false);
 	obs_data_set_default_int(settings, "title_outline_size", DEFAULT_TEXT_OUTLINE_SIZE_PX);
@@ -3488,6 +3736,10 @@ static void spotify_source_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, "artist_outline_enabled", false);
 	obs_data_set_default_int(settings, "artist_outline_size", DEFAULT_TEXT_OUTLINE_SIZE_PX);
 	obs_data_set_default_int(settings, "artist_outline_color", DEFAULT_COLOR_BLACK);
+
+	obs_data_set_default_bool(settings, "album_outline_enabled", false);
+	obs_data_set_default_int(settings, "album_outline_size", DEFAULT_TEXT_OUTLINE_SIZE_PX);
+	obs_data_set_default_int(settings, "album_outline_color", DEFAULT_COLOR_BLACK);
 
 	obs_data_set_default_string(settings, "card_style", "none");
 	obs_data_set_default_int(settings, "vhs_intensity", DEFAULT_VHS_INTENSITY);
@@ -3560,6 +3812,9 @@ static void spotify_source_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "card_width", DEFAULT_CARD_W);
 	obs_data_set_default_int(settings, "card_height", DEFAULT_CARD_H);
 	obs_data_set_default_int(settings, "text_offset_y", 0);
+	obs_data_set_default_int(settings, "title_line_spacing", DEFAULT_TITLE_LINE_SPACING);
+	obs_data_set_default_int(settings, "artist_line_spacing", DEFAULT_ARTIST_LINE_SPACING);
+	obs_data_set_default_int(settings, "album_line_spacing", DEFAULT_ALBUM_LINE_SPACING);
 	obs_data_set_default_int(settings, "progress_bar_gap", DEFAULT_PROGRESS_BAR_GAP);
 	obs_data_set_default_int(settings, "progress_bar_height", DEFAULT_PROGRESS_BAR_HEIGHT);
 
@@ -3580,6 +3835,7 @@ static void spotify_source_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, "show_plugin_attribution", true);
 	obs_data_set_default_bool(settings, "hide_album_art", false);
 	obs_data_set_default_bool(settings, "show_album_name", false);
+	obs_data_set_default_bool(settings, "show_album_name_own_line", false);
 	obs_data_set_default_bool(settings, "show_song_artist_single_line", false);
 
 	obs_data_set_default_bool(settings, "show_progress_bar", true);
@@ -3606,6 +3862,13 @@ static void spotify_source_defaults(obs_data_t *settings)
 	obs_data_set_default_int(artist_font_obj, "size", DEFAULT_ARTIST_FONT_SIZE);
 	obs_data_set_default_obj(settings, "artist_font", artist_font_obj);
 	obs_data_release(artist_font_obj);
+
+	obs_data_t *album_font_obj = obs_data_create();
+	obs_data_set_default_string(album_font_obj, "face", "Segoe UI");
+	obs_data_set_default_string(album_font_obj, "style", "Regular");
+	obs_data_set_default_int(album_font_obj, "size", DEFAULT_ALBUM_FONT_SIZE);
+	obs_data_set_default_obj(settings, "album_font", album_font_obj);
+	obs_data_release(album_font_obj);
 }
 
 static bool autohide_enabled_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
@@ -3660,6 +3923,38 @@ static bool show_song_artist_single_line_modified(obs_properties_t *props, obs_p
 	return true;
 }
 
+static void update_album_style_properties(obs_properties_t *props, obs_data_t *settings)
+{
+	bool show_album = obs_data_get_bool(settings, "show_album_name");
+	bool own_line = show_album && obs_data_get_bool(settings, "show_album_name_own_line");
+	bool outline_enabled = obs_data_get_bool(settings, "album_outline_enabled");
+
+	obs_property_set_enabled(obs_properties_get(props, "show_album_name_own_line"), show_album);
+	obs_property_set_enabled(obs_properties_get(props, "album_font"), show_album);
+	obs_property_set_enabled(obs_properties_get(props, "album_color"), show_album);
+	obs_property_set_enabled(obs_properties_get(props, "album_outline_enabled"), show_album);
+	obs_property_set_enabled(obs_properties_get(props, "album_outline_size"), show_album && outline_enabled);
+	obs_property_set_enabled(obs_properties_get(props, "album_outline_color"), show_album && outline_enabled);	
+}
+
+static bool show_album_name_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
+{
+	update_album_style_properties(props, settings);
+	return true;
+}
+
+static bool show_album_name_own_line_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
+{
+	update_album_style_properties(props, settings);
+	return true;
+}
+
+static bool album_outline_enabled_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
+{
+	update_album_style_properties(props, settings);
+	return true;
+}
+
 static bool use_bg_image_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
 {
 	bool useArt = obs_data_get_bool(settings, "use_album_art_as_bg");
@@ -3691,10 +3986,42 @@ static bool card_style_modified(obs_properties_t *props, obs_property_t *, obs_d
 	bool isGlitch = style == "glitch";
 
 	static const char *const kVhsKeys[] = {
-		"vhs_intensity", "vhs_chroma_aberration", "vhs_smear_amount", "vhs_smear_burst_min_s", "vhs_smear_burst_max_s", "vhs_smear_min_interval_s", "vhs_smear_max_interval_s", "vhs_scanline_spacing", "vhs_scanline_intensity", "vhs_tracking_min_interval_s", "vhs_tracking_max_interval_s", "vhs_tracking_line_min_count", "vhs_tracking_line_max_count", "vhs_tracking_line_gap", "vhs_tracking_min_thickness", "vhs_tracking_max_thickness", "vhs_tracking_jitter_min", "vhs_tracking_jitter_max", "vhs_tracking_brighten", "vhs_glitch_chance_pct", "vhs_glitch_max_bands", "vhs_grain_amount",
+		"vhs_intensity",
+		"vhs_chroma_aberration", 
+		"vhs_smear_amount", 
+		"vhs_smear_burst_min_s", 
+		"vhs_smear_burst_max_s", 
+		"vhs_smear_min_interval_s", 
+		"vhs_smear_max_interval_s", 
+		"vhs_scanline_spacing", 
+		"vhs_scanline_intensity", 
+		"vhs_tracking_min_interval_s", 
+		"vhs_tracking_max_interval_s", 
+		"vhs_tracking_line_min_count", 
+		"vhs_tracking_line_max_count", 
+		"vhs_tracking_line_gap", 
+		"vhs_tracking_min_thickness", 
+		"vhs_tracking_max_thickness", 
+		"vhs_tracking_jitter_min", 
+		"vhs_tracking_jitter_max", 
+		"vhs_tracking_brighten", 
+		"vhs_glitch_chance_pct", 
+		"vhs_glitch_max_bands", 
+		"vhs_grain_amount",
 	};
 	static const char *const kEightMmKeys[] = {
-		"eightmm_intensity", "eightmm_vignette_strength", "eightmm_warmth", "eightmm_light_leak_alpha", "eightmm_light_leak_position", "eightmm_light_leak_intensity", "eightmm_weave_px", "eightmm_flicker", "eightmm_scratch_intensity", "eightmm_dust_intensity", "eightmm_scratch_max_count", "eightmm_dust_max_count",
+		"eightmm_intensity", 
+		"eightmm_vignette_strength", 
+		"eightmm_warmth", 
+		"eightmm_light_leak_alpha", 
+		"eightmm_light_leak_position", 
+		"eightmm_light_leak_intensity", 
+		"eightmm_weave_px", 
+		"eightmm_flicker", 
+		"eightmm_scratch_intensity", 
+		"eightmm_dust_intensity", 
+		"eightmm_scratch_max_count", 
+		"eightmm_dust_max_count",
 	};
 	static const char *const kDuotoneKeys[] = {
 		"duotone_shadow_color",
@@ -3707,7 +4034,19 @@ static bool card_style_modified(obs_properties_t *props, obs_property_t *, obs_d
 		"bw_vignette_strength",
 	};
 	static const char *const kGlitchKeys[] = {
-		"glitch_intensity", "glitch_pixel_sort_chance", "glitch_pixel_sort_max_rows", "glitch_pixel_sort_threshold", "glitch_tear_chance", "glitch_tear_max_count", "glitch_tear_max_height", "glitch_tear_max_offset", "glitch_tear_duplicate_chance", "glitch_channel_block_chance", "glitch_channel_block_max_count", "glitch_channel_block_max_size", "glitch_channel_block_max_offset",
+		"glitch_intensity", 
+		"glitch_pixel_sort_chance", 
+		"glitch_pixel_sort_max_rows", 
+		"glitch_pixel_sort_threshold", 
+		"glitch_tear_chance", 
+		"glitch_tear_max_count", 
+		"glitch_tear_max_height", 
+		"glitch_tear_max_offset", 
+		"glitch_tear_duplicate_chance", 
+		"glitch_channel_block_chance", 
+		"glitch_channel_block_max_count", 
+		"glitch_channel_block_max_size", 
+		"glitch_channel_block_max_offset",
 	};
 
 	for (const char *key : kVhsKeys)
@@ -3731,7 +4070,10 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_bool(props, "show_progress_bar", obs_module_text("ShowProgressBar"));
 	obs_property_t *single_line_prop = obs_properties_add_bool(props, "show_song_artist_single_line", obs_module_text("ShowSongArtistSingleLine"));
 	obs_property_set_modified_callback(single_line_prop, show_song_artist_single_line_modified);
-	obs_properties_add_bool(props, "show_album_name", obs_module_text("ShowAlbumName"));
+	obs_property_t *show_album_name_prop = obs_properties_add_bool(props, "show_album_name", obs_module_text("ShowAlbumName"));
+	obs_property_t *show_album_name_own_line_prop = obs_properties_add_bool(props, "show_album_name_own_line", obs_module_text("ShowAlbumNameOwnLine"));
+	obs_property_set_modified_callback(show_album_name_prop, show_album_name_modified);
+	obs_property_set_modified_callback(show_album_name_own_line_prop, show_album_name_own_line_modified);
 	obs_properties_add_bool(props, "track_change_animation_enabled", obs_module_text("TrackChangeAnimation"));
 	obs_properties_add_bool(props, "autohide_when_not_playing", obs_module_text("AutohideWhenNotPlaying"));
 	obs_property_t *autohide_prop = obs_properties_add_bool(props, "autohide_enabled", obs_module_text("AutohideEnabled"));
@@ -3741,8 +4083,10 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "card_height", obs_module_text("CardHeight"), DEFAULT_MIN_CARD_DIMENSION, 2000, 10);
 	obs_properties_add_font(props, "title_font", obs_module_text("TitleFont"));
 	obs_properties_add_font(props, "artist_font", obs_module_text("ArtistFont"));
+	obs_properties_add_font(props, "album_font", obs_module_text("AlbumFont"));
 	obs_properties_add_color_alpha(props, "title_color", obs_module_text("TitleColor"));
 	obs_properties_add_color_alpha(props, "artist_color", obs_module_text("ArtistColor"));
+	obs_properties_add_color_alpha(props, "album_color", obs_module_text("AlbumColor"));
 
 	obs_property_t *title_outline_enabled_prop = obs_properties_add_bool(props, "title_outline_enabled", obs_module_text("TitleOutlineEnabled"));
 	obs_properties_add_int(props, "title_outline_size", obs_module_text("TitleOutlineSize"), 1, 50, 1);
@@ -3753,6 +4097,15 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "artist_outline_size", obs_module_text("ArtistOutlineSize"), 1, 50, 1);
 	obs_properties_add_color_alpha(props, "artist_outline_color", obs_module_text("ArtistOutlineColor"));
 	obs_property_set_modified_callback(artist_outline_enabled_prop, artist_outline_enabled_modified);
+
+	obs_property_t *album_outline_enabled_prop = obs_properties_add_bool(props, "album_outline_enabled", obs_module_text("AlbumOutlineEnabled"));
+	obs_properties_add_int(props, "album_outline_size", obs_module_text("AlbumOutlineSize"), 1, 50, 1);
+	obs_properties_add_color_alpha(props, "album_outline_color", obs_module_text("AlbumOutlineColor"));
+	obs_property_set_modified_callback(album_outline_enabled_prop, album_outline_enabled_modified);
+	
+	obs_properties_add_int(props, "title_line_spacing", obs_module_text("TitleLineSpacing"), 0, 200, 1);
+	obs_properties_add_int(props, "artist_line_spacing", obs_module_text("ArtistLineSpacing"), 0, 200, 1);
+	obs_properties_add_int(props, "album_line_spacing", obs_module_text("AlbumLineSpacing"), 0, 200, 1);
 
 	obs_property_t *use_album_art_as_bg_prop = obs_properties_add_bool(props, "use_album_art_as_bg", obs_module_text("UseAlbumArtAsBackground"));
 	obs_properties_add_int(props, "album_art_bg_blur", obs_module_text("AlbumArtBackgroundBlur"), 0, 100, 1);
