@@ -611,8 +611,14 @@ FontStyle ParseFontStyle(const std::string &style, int flags)
 
 void PaintTextRun(Graphics &g, const std::wstring &text, Font &font, Brush &fillBrush, const RectF &layoutRect, StringFormat &sf, bool outlineEnabled, float outlineWidthPx, const Color &outlineColor)
 {
+	RectF drawRect = layoutRect;
+	float minH = font.GetSize() * 3.0f;
+	if (drawRect.Height < minH) {
+		drawRect.Height = minH;
+	}
+
 	if (!outlineEnabled || outlineWidthPx <= 0.0f) {
-		g.DrawString(text.c_str(), -1, &font, layoutRect, &sf, &fillBrush);
+		g.DrawString(text.c_str(), -1, &font, drawRect, &sf, &fillBrush);
 		return;
 	}
 
@@ -621,7 +627,7 @@ void PaintTextRun(Graphics &g, const std::wstring &text, Font &font, Brush &fill
 
 	GraphicsPath path;
 	path.SetFillMode(FillModeWinding);
-	path.AddString(text.c_str(), -1, &fam, font.GetStyle(), font.GetSize(), layoutRect, &sf);
+	path.AddString(text.c_str(), -1, &fam, font.GetStyle(), font.GetSize(), drawRect, &sf);
 
 	Pen outlinePen(outlineColor, outlineWidthPx * 2.0f);
 	outlinePen.SetLineJoin(LineJoinRound);
@@ -688,6 +694,9 @@ void DrawScrollableLine(Graphics &g, const std::wstring &text, Font &font, Brush
 	RectF clipRect = bounds;
 	clipRect.X -= outlinePad;
 	clipRect.Width += outlinePad * 2.0f;
+	constexpr REAL kScrollClipVerticalPad = 10000.0f;
+	clipRect.Y -= kScrollClipVerticalPad;
+	clipRect.Height += kScrollClipVerticalPad * 2.0f;
 	g.SetClip(clipRect);
 
 	RectF r = bounds;
@@ -4102,7 +4111,7 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "album_outline_size", obs_module_text("AlbumOutlineSize"), 1, 50, 1);
 	obs_properties_add_color_alpha(props, "album_outline_color", obs_module_text("AlbumOutlineColor"));
 	obs_property_set_modified_callback(album_outline_enabled_prop, album_outline_enabled_modified);
-	
+
 	obs_properties_add_int(props, "title_line_spacing", obs_module_text("TitleLineSpacing"), 0, 200, 1);
 	obs_properties_add_int(props, "artist_line_spacing", obs_module_text("ArtistLineSpacing"), 0, 200, 1);
 	obs_properties_add_int(props, "album_line_spacing", obs_module_text("AlbumLineSpacing"), 0, 200, 1);
