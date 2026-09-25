@@ -4111,10 +4111,11 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "album_outline_size", obs_module_text("AlbumOutlineSize"), 1, 50, 1);
 	obs_properties_add_color_alpha(props, "album_outline_color", obs_module_text("AlbumOutlineColor"));
 	obs_property_set_modified_callback(album_outline_enabled_prop, album_outline_enabled_modified);
-
-	obs_properties_add_int(props, "title_line_spacing", obs_module_text("TitleLineSpacing"), -50, 200, 1);
-	obs_properties_add_int(props, "artist_line_spacing", obs_module_text("ArtistLineSpacing"), -50, 200, 1);
-	obs_properties_add_int(props, "album_line_spacing", obs_module_text("AlbumLineSpacing"), -50, 200, 1);
+	
+	obs_properties_add_int(props, "text_offset_y", obs_module_text("TextVerticalOffset"), -1000, 1000, 1);
+	obs_properties_add_int(props, "title_line_spacing", obs_module_text("TitleLineSpacing"), -200, 200, 1);
+	obs_properties_add_int(props, "artist_line_spacing", obs_module_text("ArtistLineSpacing"), -200, 200, 1);
+	obs_properties_add_int(props, "album_line_spacing", obs_module_text("AlbumLineSpacing"), -200, 200, 1);
 
 	obs_property_t *use_album_art_as_bg_prop = obs_properties_add_bool(props, "use_album_art_as_bg", obs_module_text("UseAlbumArtAsBackground"));
 	obs_properties_add_int(props, "album_art_bg_blur", obs_module_text("AlbumArtBackgroundBlur"), 0, 100, 1);
@@ -4127,7 +4128,6 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "background_corner_radius", obs_module_text("BackgroundCornerRadius"), DEFAULT_MIN_CORNER_RADIUS, DEFAULT_MAX_CORNER_RADIUS, 1);
 	obs_properties_add_int(props, "album_art_corner_radius", obs_module_text("AlbumArtCornerRadius"), DEFAULT_MIN_CORNER_RADIUS, DEFAULT_MAX_CORNER_RADIUS, 1);
 
-	obs_properties_add_int(props, "text_offset_y", obs_module_text("TextVerticalOffset"), -1000, 1000, 1);
 	obs_properties_add_int(props, "scroll_speed_ms", obs_module_text("ScrollSpeed"), 50, 5000, 10);
 	obs_properties_add_color_alpha(props, "progress_fill_color", obs_module_text("ProgressFillColor"));
 	obs_properties_add_color_alpha(props, "progress_bg_color", obs_module_text("ProgressBackgroundColor"));
