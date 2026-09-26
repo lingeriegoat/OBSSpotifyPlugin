@@ -782,7 +782,7 @@ struct GlitchChannelBlock {
 #define APPEARANCE_SETTINGS_FIELDS(X) \
 	X(long long, title_color, DEFAULT_COLOR_WHITE) \
 	X(long long, artist_color, DEFAULT_COLOR_WHITE) \
-	X(long long, bg_color, 0) \
+	X(long long, bg_color, DEFAULT_COLOR_BLACK) \
 	X(int, bg_opacity, DEFAULT_BG_OPACITY) \
 	X(bool, use_bg_image, false) \
 	X(std::string, bg_image_path, "") \
@@ -806,9 +806,9 @@ struct GlitchChannelBlock {
 	X(int, card_w, DEFAULT_CARD_W) \
 	X(int, card_h, DEFAULT_CARD_H) \
 	X(int, text_offset_y, 0) \
-	X(int, title_line_spacing, 10) \
-	X(int, artist_line_spacing, 8) \
-	X(int, album_line_spacing, 8) \
+	X(int, title_line_spacing, DEFAULT_TITLE_LINE_SPACING) \
+	X(int, artist_line_spacing, DEFAULT_ARTIST_LINE_SPACING) \
+	X(int, album_line_spacing, DEFAULT_ALBUM_LINE_SPACING) \
 	X(int, progress_bar_gap, DEFAULT_PROGRESS_BAR_GAP) \
 	X(int, progress_bar_height, DEFAULT_PROGRESS_BAR_HEIGHT) \
 	X(int, scroll_speed_ms, DEFAULT_SCROLL_SPEED_MS) \
