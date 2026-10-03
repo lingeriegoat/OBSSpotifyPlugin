@@ -42,6 +42,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -61,7 +62,9 @@ using namespace Gdiplus;
 
 namespace {
 
-constexpr UINT MAX_ART_DIMENSION = 16384; // sanity cap against a malformed/corrupt image header
+constexpr int MAX_METADATA_STRING_LENGTH = 2048;
+constexpr UINT MAX_ART_DIMENSION = 16384; // sanity cap against a malformed/corrupt image header    
+constexpr long long MAX_TEXT_STRIP_PIXELS = 64LL * 1024 * 1024; // 256 MB at 4 bytes/px
 constexpr int64_t BACKWARD_THRESHOLD_TICKS = (int64_t)(12 * 1.0e7); // seconds converted to 100ns ticks
 constexpr int DEFAULT_SESSION_GRACE_SECONDS = 3;
 constexpr int POLL_INTERVAL_MS = 250; // how often we poll SMTC
@@ -257,9 +260,9 @@ struct NativeMediaInfo {
 	int64_t SongDurationTicks;
 	int64_t CurrentPlaybackTimeTicks;
 	bool IsPlaying;
-	char SongName[256];
-	char ArtistName[256];
-	char AlbumName[256];
+	char SongName[MAX_METADATA_STRING_LENGTH];
+	char ArtistName[MAX_METADATA_STRING_LENGTH];
+	char AlbumName[MAX_METADATA_STRING_LENGTH];
 	uint8_t *ImageData;
 	int ImageLength;
 };
@@ -320,10 +323,8 @@ std::vector<std::string> LoadStringList(const char *filename)
 }
 
 // hstring -> UTF-8, Required to decode unicode text
-void CopyHstringToUtf8(const winrt::hstring &src, char *dst, int maxLen)
+void CopyHstringToUtf8(const winrt::hstring &src, char *dst)
 {
-	if (maxLen <= 0)
-		return;
 	if (src.empty()) {
 		dst[0] = '\0';
 		return;
@@ -339,8 +340,8 @@ void CopyHstringToUtf8(const winrt::hstring &src, char *dst, int maxLen)
 	WideCharToMultiByte(CP_UTF8, 0, src.c_str(), -1, utf8.data(), needed, nullptr, nullptr);
 
 	int copyLen = needed - 1; // exclude the null terminator itself from the length check
-	if (copyLen > maxLen - 1)
-		copyLen = maxLen - 1; // leave room for the null terminator
+	if (copyLen > MAX_METADATA_STRING_LENGTH - 1)
+		copyLen = MAX_METADATA_STRING_LENGTH - 1; // leave room for the null terminator
 
 	if (copyLen > 0)
 		memcpy(dst, utf8.data(), (size_t)copyLen);
@@ -455,9 +456,9 @@ static bool GetCurrentTrackNative(GlobalSystemMediaTransportControlsSessionManag
 		outInfo->CurrentPlaybackTimeTicks = timeline.Position().count();
 		outInfo->IsPlaying = playbackInfo.PlaybackStatus() == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
 
-		CopyHstringToUtf8(props.Title(), outInfo->SongName, 256);
-		CopyHstringToUtf8(props.Artist(), outInfo->ArtistName, 256);
-		CopyHstringToUtf8(props.AlbumTitle(), outInfo->AlbumName, 256);
+		CopyHstringToUtf8(props.Title(), outInfo->SongName);
+		CopyHstringToUtf8(props.Artist(), outInfo->ArtistName);
+		CopyHstringToUtf8(props.AlbumTitle(), outInfo->AlbumName);
 
 		ReadThumbnail(props, outInfo);
 
@@ -643,18 +644,114 @@ void PaintTextRun(Graphics &g, const std::wstring &text, Font &font, Brush &fill
 	g.SetSmoothingMode(prevSmoothing);
 }
 
+struct TextStripKey {
+	std::wstring text;
+	std::wstring family;
+	float size = 0.0f;
+	int style = 0;
+	ARGB fill = 0;
+	bool outline = false;
+	float outlineW = 0.0f;
+	ARGB outlineArgb = 0;
+	float measuredW = 0.0f;
+	float layoutH = 0.0f;
+
+	bool operator==(const TextStripKey &o) const { return text == o.text && family == o.family && size == o.size && style == o.style && fill == o.fill && outline == o.outline && outlineW == o.outlineW && outlineArgb == o.outlineArgb && measuredW == o.measuredW && layoutH == o.layoutH; }
+};
+
 struct ScrollMeasureCache {
 	std::wstring text;
 	Font *font = nullptr;
 	RectF measured{};
+
+	std::unique_ptr<Bitmap> strip;
+	TextStripKey stripKey;
+	int stripPad = 0;
+	bool stripUnavailable = false; 
 };
+
+static bool EnsureTextStrip(ScrollMeasureCache &c, const std::wstring &text, Font &font, Brush &brush, const RectF &measured, float layoutH, bool outlineEnabled, float outlineW, const Color &outlineColor)
+{
+	TextStripKey key;
+	key.text = text;
+	FontFamily fam;
+	font.GetFamily(&fam);
+	WCHAR famName[LF_FACESIZE] = {};
+	fam.GetFamilyName(famName);
+	key.family = famName;
+	key.size = font.GetSize();
+	key.style = font.GetStyle();
+	Color fill(255, 255, 255, 255);
+	if (brush.GetType() == BrushTypeSolidColor)
+		static_cast<SolidBrush &>(brush).GetColor(&fill);
+	key.fill = fill.GetValue();
+	key.outline = outlineEnabled && outlineW > 0.0f;
+	key.outlineW = key.outline ? outlineW : 0.0f;
+	key.outlineArgb = key.outline ? outlineColor.GetValue() : 0;
+	key.measuredW = measured.Width;
+	key.layoutH = layoutH;
+
+	if (c.stripKey == key && (c.strip || c.stripUnavailable))
+		return c.strip != nullptr;
+
+	c.strip.reset();
+	c.stripKey = key;
+	c.stripUnavailable = true;
+
+	const int pad = (key.outline ? (int)std::ceil(outlineW) : 0) + 2; // outline thickness + antialiasing fringe
+	const long long w = (long long)std::ceil(measured.Width) + 4 + 2 * pad;
+	const long long h = (long long)std::ceil(layoutH) + 2 * pad;
+	if (w <= 0 || h <= 0 || w > INT_MAX || h > INT_MAX || w * h > MAX_TEXT_STRIP_PIXELS)
+		return false;
+
+	auto bmp = std::make_unique<Bitmap>((INT)w, (INT)h, PixelFormat32bppPARGB);
+	if (bmp->GetLastStatus() != Ok)
+		return false;
+
+	{
+		Graphics sg(bmp.get());
+		sg.SetSmoothingMode(SmoothingModeHighQuality);
+		sg.SetPixelOffsetMode(PixelOffsetModeHighQuality);
+		sg.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
+		sg.Clear(Color(0, 0, 0, 0));
+		std::unique_ptr<StringFormat> sfClone(StringFormat::GenericTypographic()->Clone());
+		StringFormat defaultFallback;
+		StringFormat &sf = sfClone ? *sfClone : defaultFallback;
+		sf.SetFormatFlags(sf.GetFormatFlags() | StringFormatFlagsNoWrap);
+		RectF layout((REAL)pad, (REAL)pad, measured.Width + 4.0f, layoutH);
+		PaintTextRun(sg, text, font, brush, layout, sf, outlineEnabled, outlineW, outlineColor);
+	}
+
+	c.strip = std::move(bmp);
+	c.stripPad = pad;
+	c.stripUnavailable = false;
+	return true;
+}
+
+static void BlitTextStrip(Graphics &g, Bitmap &strip, int destX, int destY, int srcX, int srcW)
+{
+	const int stripH = (int)strip.GetHeight();
+	if (srcW <= 0 || stripH <= 0)
+		return;
+	InterpolationMode prevInterp = g.GetInterpolationMode();
+	PixelOffsetMode prevPixelOffset = g.GetPixelOffsetMode();
+	g.SetInterpolationMode(InterpolationModeNearestNeighbor);
+	g.SetPixelOffsetMode(PixelOffsetModeHalf);
+	Rect dest(destX, destY, srcW, stripH);
+	g.DrawImage(&strip, dest, srcX, 0, srcW, stripH, UnitPixel);
+	g.SetInterpolationMode(prevInterp);
+	g.SetPixelOffsetMode(prevPixelOffset);
+}
 
 void DrawScrollableLine(Graphics &g, const std::wstring &text, Font &font, Brush &brush, const RectF &bounds, double scrollOffsetPx, bool centerWhenStatic, bool outlineEnabled, float outlineWidthPx, const Color &outlineColor, bool *outNeedsScroll, double *outAvgCharPx, double *outMaxOffsetPx, ScrollMeasureCache *measureCache = nullptr)
 {
 	*outNeedsScroll = false;
 	*outMaxOffsetPx = 0.0;
-	if (text.empty())
+	if (text.empty()) {
+		if (measureCache)
+			measureCache->strip.reset();
 		return;
+	}
 
 	std::unique_ptr<StringFormat> sfClone(StringFormat::GenericTypographic()->Clone());
 	StringFormat defaultFallback;
@@ -675,6 +772,18 @@ void DrawScrollableLine(Graphics &g, const std::wstring &text, Font &font, Brush
 	*outAvgCharPx = std::max(1.0, (double)measured.Width / (double)text.length());
 
 	if (measured.Width <= bounds.Width) {
+		if (measureCache) {
+			float layoutH = std::max(bounds.Height, font.GetSize() * 3.0f); // same minimum height PaintTextRun applies
+			if (EnsureTextStrip(*measureCache, text, font, brush, measured, layoutH, outlineEnabled, outlineWidthPx, outlineColor)) {
+				Bitmap &strip = *measureCache->strip;
+				const int pad = measureCache->stripPad;
+				float textX = bounds.X;
+				if (centerWhenStatic)
+					textX += (bounds.Width - measured.Width) * 0.5f;
+				BlitTextStrip(g, strip, (int)std::lround(textX) - pad, (int)std::lround(bounds.Y) - pad, 0, (int)strip.GetWidth());
+				return;
+			}
+		}
 		if (centerWhenStatic)
 			sf.SetAlignment(StringAlignmentCenter);
 		sf.SetTrimming(StringTrimmingEllipsisCharacter); // safety net
@@ -699,11 +808,26 @@ void DrawScrollableLine(Graphics &g, const std::wstring &text, Font &font, Brush
 	clipRect.Height += kScrollClipVerticalPad * 2.0f;
 	g.SetClip(clipRect);
 
-	RectF r = bounds;
-	r.X -= (REAL)offset;
-	r.Width = measured.Width + 4.0f; // wide enough for the full text
-
-	PaintTextRun(g, text, font, brush, r, sf, outlineEnabled, outlineWidthPx, outlineColor);
+	bool drewFromStrip = false;
+	if (measureCache) {
+		float layoutH = std::max(bounds.Height, font.GetSize() * 3.0f); // same minimum height PaintTextRun applies
+		if (EnsureTextStrip(*measureCache, text, font, brush, measured, layoutH, outlineEnabled, outlineWidthPx, outlineColor)) {
+			Bitmap &strip = *measureCache->strip;
+			const int pad = measureCache->stripPad;
+			const int stripW = (int)strip.GetWidth();
+			const int srcX = std::clamp((int)std::lround(offset), 0, std::max(0, stripW - 1));
+			const int srcW = std::min((int)std::ceil(bounds.Width) + 2 * pad, stripW - srcX);
+			BlitTextStrip(g, strip, (int)std::lround(bounds.X) - pad, (int)std::lround(bounds.Y) - pad, srcX, srcW);
+			drewFromStrip = true;
+		}
+	}
+	if (!drewFromStrip) {
+		// Fallback (no cache, strip too large, or allocation failed): draw the whole line directly, shifted by the scroll offset.
+		RectF r = bounds;
+		r.X -= (REAL)offset;
+		r.Width = measured.Width + 4.0f; // wide enough for the full text
+		PaintTextRun(g, text, font, brush, r, sf, outlineEnabled, outlineWidthPx, outlineColor);
+	}
 
 	g.SetClip(&savedClip);
 }
@@ -3943,7 +4067,7 @@ static void update_album_style_properties(obs_properties_t *props, obs_data_t *s
 	obs_property_set_enabled(obs_properties_get(props, "album_color"), show_album);
 	obs_property_set_enabled(obs_properties_get(props, "album_outline_enabled"), show_album);
 	obs_property_set_enabled(obs_properties_get(props, "album_outline_size"), show_album && outline_enabled);
-	obs_property_set_enabled(obs_properties_get(props, "album_outline_color"), show_album && outline_enabled);	
+	obs_property_set_enabled(obs_properties_get(props, "album_outline_color"), show_album && outline_enabled);
 }
 
 static bool show_album_name_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
@@ -4111,7 +4235,7 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_int(props, "album_outline_size", obs_module_text("AlbumOutlineSize"), 1, 50, 1);
 	obs_properties_add_color_alpha(props, "album_outline_color", obs_module_text("AlbumOutlineColor"));
 	obs_property_set_modified_callback(album_outline_enabled_prop, album_outline_enabled_modified);
-	
+
 	obs_properties_add_int(props, "text_offset_y", obs_module_text("TextVerticalOffset"), -1000, 1000, 1);
 	obs_properties_add_int(props, "title_line_spacing", obs_module_text("TitleLineSpacing"), -200, 200, 1);
 	obs_properties_add_int(props, "artist_line_spacing", obs_module_text("ArtistLineSpacing"), -200, 200, 1);
