@@ -4108,6 +4108,13 @@ static bool use_album_art_as_bg_modified(obs_properties_t *props, obs_property_t
 	return true;
 }
 
+static bool open_github_url(obs_properties_t *props, obs_property_t *property, void *settings)
+{
+	ShellExecuteW(NULL, L"open", L"https://github.com/lingeriegoat/OBSSpotifyPlugin", NULL, NULL, SW_SHOWNORMAL);
+
+	return true;
+}
+
 static bool card_style_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
 {
 	const char *styleRaw = obs_data_get_string(settings, "card_style");
@@ -4353,6 +4360,10 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	//apparently globals are shared between ALL instances of a plugin. Weird.
 	obs_property_t *enable_browser_prop = obs_properties_add_bool(props, "enable_browser_media", obs_module_text("EnableBrowserMedia"));
 	obs_properties_add_text(props, "enable_browser_media_warning", obs_module_text("EnableBrowserMediaWarning"), OBS_TEXT_INFO);
+
+	//attribution
+	obs_properties_add_text(props, "attribution_text", obs_module_text("AttributionText"), OBS_TEXT_INFO);
+	obs_properties_add_button(props, "github_link", obs_module_text("GithubLink"), open_github_url);
 
 	auto *ctx = (spotify_source *)data;
 	if (ctx && ctx->source) {
