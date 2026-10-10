@@ -4364,6 +4364,7 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 	obs_properties_add_text(props, "enable_browser_media_warning", obs_module_text("EnableBrowserMediaWarning"), OBS_TEXT_INFO);
 
 	//attribution
+	obs_properties_add_text(props, "divider", obs_module_text("--------------------------------------------------------------------------"), OBS_TEXT_INFO);
 	obs_properties_add_text(props, "attribution_text", obs_module_text("AttributionText"), OBS_TEXT_INFO);
 	obs_property_t *p = obs_properties_add_text(props, "github_info", "", OBS_TEXT_INFO);
 	obs_property_text_set_info_type(p, OBS_TEXT_INFO_NORMAL);

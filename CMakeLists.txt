@@ -52,15 +52,16 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E rm -rf
           "${_obs_layout_dir}"
   COMMAND ${CMAKE_COMMAND} -E make_directory
-          "${_obs_layout_dir}/obs-plugins/64bit"
+          "${_obs_layout_dir}/${_name}/data"
+          "${_obs_layout_dir}/${_name}/bin/64bit"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
-          "${_obs_layout_dir}/obs-plugins/64bit/${_name}.dll"
+          "${_obs_layout_dir}/${_name}/bin/64bit/${_name}.dll"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/data/obs-plugins/${_name}"
-          "${_obs_layout_dir}/data/obs-plugins/${_name}"
+          "${_obs_layout_dir}/${_name}/data"
   COMMAND ${CMAKE_COMMAND} -E chdir "${_obs_layout_dir}"
-          ${CMAKE_COMMAND} -E tar cf "${_zip_name}" --format=zip -- obs-plugins data
+          ${CMAKE_COMMAND} -E tar cf "${_zip_name}" --format=zip -- "${_name}"
   COMMENT "Assembling and zipping OBS plugin package in ${_obs_layout_dir}"
   VERBATIM
 )
