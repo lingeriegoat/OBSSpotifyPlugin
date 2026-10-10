@@ -34,7 +34,23 @@ More services may be added later if they are requested and I can reasonably get 
 
 # How to use
 
-### Release 1.8 and up
+### Release 2.9 and up
+
+We now package the plugin in the "modern" OBS way, which means you can use it on OBS versions >33. There are 2 builds of the plugin, a `_modern.zip` and a `_legacy.zip`. Legacy is for versions of OBS <33, and modern is for all versions newer than 33.
+
+The installation process for both `modern` and `legacy` are identical, you will unzip the `obs-spotify-overlay-plugin` into the OBS ProgramData plugins folder, usually something like `C:\ProgramData\obs-studio\plugins\`. It is a "hidden" folder, so if you can not see it, you can navigate directly to it by pasting `%ProgramData%/obs-studio/plugins` into your file explorer. See screenshot below.
+
+<img width="805" height="234" alt="image" src="https://github.com/user-attachments/assets/5640527f-02a1-4e59-bf86-edb34b181cee" />
+
+**PLEASE NOTE:** If you are upgrading from an older version of the plugin, you WILL have to delete the previous files that are installed into your OBS root directory. The first will be found in the plugins folder, usually something like `C:\Program Files\obs-studio\obs-plugins\64bit`, and it will be called `obs-spotify-overlay-plugin.dll`. Delete this dll file. The second will be found in the data folder, usually something like `C:\Program Files\obs-studio\data\obs-plugins`, and it will be a folder called `obs-spotify-overlay-plugin`. Delete the entire folder. Please see screenshots below to verify which files to delete.
+
+<img width="814" height="171" alt="image" src="https://github.com/user-attachments/assets/af1d6187-da27-43f8-a1b4-bd99c86b2bcb" /> <img width="785" height="158" alt="image" src="https://github.com/user-attachments/assets/e0989247-4cde-411d-89ef-98b1bbac7810" />
+
+If you do not delete these files, OBS will load these first, preventing you from successfully updating the plugin.
+
+
+
+### Release 1.8 to 2.8
 
 Download the latest release from the releases page. Unzip into the root of your OBS directory (usually something like `C:\Program Files\obs-studio\`). Launch OBS and add a new source, choose the new option called Now Playing Widget. Configure the settings using the built in options.
 
