@@ -6,7 +6,7 @@ https://www.twitch.tv/lingeriegoat
 
 A little support goes a long way! If you’d like to help me keep creating, you can do so at https://ko-fi.com/lingeriegoat
 
-<img width="320" height="416" alt="image" src="https://github.com/user-attachments/assets/7eb87197-aa50-41a4-8543-b74e7c938a21" />
+[<img width="320" height="416" alt="image" src="https://github.com/user-attachments/assets/7eb87197-aa50-41a4-8543-b74e7c938a21" />](https://ko-fi.com/lingeriegoat)
 
 Please note that donations are entirely optional, if you want new features in the plugin or just want to ask questions, please do not donate just for that reason. You can ask questions here, on the OBS forums, or on my twitch stream when I am live.
 
