@@ -3982,6 +3982,8 @@ static void spotify_source_defaults(obs_data_t *settings)
 
 	obs_data_set_default_bool(settings, "autohide_when_not_playing", false);
 
+	obs_data_set_default_string(settings, "github_info", "<a href=\"https://github.com/lingeriegoat/OBSSpotifyPlugin\">NowPlayingWidget Github</a>");
+
 	obs_data_t *title_font_obj = obs_data_create();
 	obs_data_set_default_string(title_font_obj, "face", "Segoe UI");
 	obs_data_set_default_string(title_font_obj, "style", "Bold");
@@ -4363,7 +4365,8 @@ static void spotify_source_properties_impl(obs_properties_t *props, void *data)
 
 	//attribution
 	obs_properties_add_text(props, "attribution_text", obs_module_text("AttributionText"), OBS_TEXT_INFO);
-	obs_properties_add_button(props, "github_link", obs_module_text("GithubLink"), open_github_url);
+	obs_property_t *p = obs_properties_add_text(props, "github_info", "", OBS_TEXT_INFO);
+	obs_property_text_set_info_type(p, OBS_TEXT_INFO_NORMAL);
 
 	auto *ctx = (spotify_source *)data;
 	if (ctx && ctx->source) {
