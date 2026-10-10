@@ -42,26 +42,43 @@ if(MSVC)
   set_source_files_properties(src/spotify-source.cpp PROPERTIES COMPILE_OPTIONS /EHa)
 endif()
 
-set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
-
 set(_obs_layout_dir "${CMAKE_BINARY_DIR}/Plugin_Release")
-set(_zip_name "OBSSpotifyNativePlugin${PLUGIN_VERSION_RAW}.zip")
+set(_zip_base "OBSSpotifyNativePlugin${PLUGIN_VERSION_RAW}")
+set(_zip_modern "${_zip_base}_modern.zip")
+set(_zip_legacy "${_zip_base}_legacy.zip")
+
+set(_stage_modern "${_obs_layout_dir}/_stage_modern")
+set(_stage_legacy "${_obs_layout_dir}/_stage_legacy")
+set(_data_src "${CMAKE_CURRENT_SOURCE_DIR}/data/obs-plugins/${_name}")
 
 add_custom_command(
   TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E rm -rf
-          "${_obs_layout_dir}"
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${_obs_layout_dir}"
+
   COMMAND ${CMAKE_COMMAND} -E make_directory
-          "${_obs_layout_dir}/${_name}/data"
-          "${_obs_layout_dir}/${_name}/bin/64bit"
+          "${_stage_modern}/${_name}/data"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
-          "${_obs_layout_dir}/${_name}/bin/64bit/${_name}.dll"
+          "${_stage_modern}/${_name}/${_name}.dll"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
-          "${CMAKE_CURRENT_SOURCE_DIR}/data/obs-plugins/${_name}"
-          "${_obs_layout_dir}/${_name}/data"
-  COMMAND ${CMAKE_COMMAND} -E chdir "${_obs_layout_dir}"
-          ${CMAKE_COMMAND} -E tar cf "${_zip_name}" --format=zip -- "${_name}"
-  COMMENT "Assembling and zipping OBS plugin package in ${_obs_layout_dir}"
+          "${_data_src}"
+          "${_stage_modern}/${_name}/data"
+  COMMAND ${CMAKE_COMMAND} -E chdir "${_stage_modern}"
+          ${CMAKE_COMMAND} -E tar cf "../${_zip_modern}" --format=zip -- "${_name}"
+
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+          "${_stage_legacy}/${_name}/bin/64bit"
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+          "${_stage_legacy}/${_name}/data"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
+          "${_stage_legacy}/${_name}/bin/64bit/${_name}.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${_data_src}"
+          "${_stage_legacy}/${_name}/data"
+  COMMAND ${CMAKE_COMMAND} -E chdir "${_stage_legacy}"
+          ${CMAKE_COMMAND} -E tar cf "../${_zip_legacy}" --format=zip -- "${_name}"
+
+  COMMENT "Assembling modern and legacy OBS plugin packages in ${_obs_layout_dir}"
   VERBATIM
 )
