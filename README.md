@@ -42,7 +42,9 @@ The installation process for both `modern` and `legacy` are identical, you will 
 
 <img width="805" height="234" alt="image" src="https://github.com/user-attachments/assets/5640527f-02a1-4e59-bf86-edb34b181cee" />
 
-For OBS Portable versions, please use the `_modern` package, and install it as instructed here on the OBS wiki: https://obsproject.com/kb/legacy-plugin-locations 
+For OBS Portable versions, please use the `_portable` package. Installation remains unchanged from previous versions. Unzip the contents into your portable installations root directory, merging the `obs-plugins` and `data` folders, and overwriting any existing files if prompted.
+
+Portable installation *may* change in the future, it does not seem like OBS has finalized what theyre going to do about portable plugins as of now.
 
 **PLEASE NOTE:** If you are upgrading from an older version of the plugin, you ***will*** have to delete the previous files that are installed into your OBS root directory. The first will be found in the plugins folder, usually something like `C:\Program Files\obs-studio\obs-plugins\64bit`, and it will be called `obs-spotify-overlay-plugin.dll`. Delete this dll file. The second will be found in the data folder, usually something like `C:\Program Files\obs-studio\data\obs-plugins`, and it will be a folder called `obs-spotify-overlay-plugin`. Delete the entire folder. Please see screenshots below to verify which files to delete.
 
