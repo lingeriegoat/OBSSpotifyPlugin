@@ -44,11 +44,13 @@ endif()
 
 set(_obs_layout_dir "${CMAKE_BINARY_DIR}/Plugin_Release")
 set(_zip_base "OBSSpotifyNativePlugin${PLUGIN_VERSION_RAW}")
-set(_zip_modern "${_zip_base}_modern.zip")
-set(_zip_legacy "${_zip_base}_legacy.zip")
+set(_zip_modern   "${_zip_base}_modern.zip")
+set(_zip_legacy   "${_zip_base}_legacy.zip")
+set(_zip_portable "${_zip_base}_portable.zip")
 
-set(_stage_modern "${_obs_layout_dir}/_stage_modern")
-set(_stage_legacy "${_obs_layout_dir}/_stage_legacy")
+set(_stage_modern   "${_obs_layout_dir}/_stage_modern")
+set(_stage_legacy   "${_obs_layout_dir}/_stage_legacy")
+set(_stage_portable "${_obs_layout_dir}/_stage_portable")
 set(_data_src "${CMAKE_CURRENT_SOURCE_DIR}/data/obs-plugins/${_name}")
 
 add_custom_command(
@@ -79,6 +81,19 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E chdir "${_stage_legacy}"
           ${CMAKE_COMMAND} -E tar cf "../${_zip_legacy}" --format=zip -- "${_name}"
 
-  COMMENT "Assembling modern and legacy OBS plugin packages in ${_obs_layout_dir}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+          "${_stage_portable}/obs-plugins/64bit"
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+          "${_stage_portable}/data/obs-plugins/${_name}"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
+          "${_stage_portable}/obs-plugins/64bit/${_name}.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${_data_src}"
+          "${_stage_portable}/data/obs-plugins/${_name}"
+  COMMAND ${CMAKE_COMMAND} -E chdir "${_stage_portable}"
+          ${CMAKE_COMMAND} -E tar cf "../${_zip_portable}" --format=zip -- obs-plugins data
+
+  COMMENT "Assembling modern, legacy and portable OBS plugin packages in ${_obs_layout_dir}"
   VERBATIM
 )

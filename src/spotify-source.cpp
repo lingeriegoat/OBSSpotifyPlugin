@@ -238,12 +238,6 @@ bool HasNonSpaceChar(const std::string &s)
 
 // ---------------------------------------------------------------------
 // Native SMTC reading (formerly SpotifyBridge.dll + SpotifyReader.dll)
-//
-// This block replaces the old C++/CLI bridge and its managed SpotifyReader.dll
-// assembly. GlobalSystemMediaTransportControlsSessionManager is a WinRT type,
-// and WinRT types are directly callable from plain native C++ via C++/WinRT
-// (the <winrt/...> headers) -- no .NET runtime, no AssemblyResolve handler,
-// and no separate DLL that can fail to load from the wrong directory.
 // ---------------------------------------------------------------------
 
 using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession;
@@ -4107,13 +4101,6 @@ static bool use_album_art_as_bg_modified(obs_properties_t *props, obs_property_t
 	obs_property_set_enabled(obs_properties_get(props, "album_art_bg_blur"), useArt);
 	obs_property_set_enabled(obs_properties_get(props, "use_bg_image"), !useArt);
 	obs_property_set_enabled(obs_properties_get(props, "bg_image_path"), !useArt && useImg);
-	return true;
-}
-
-static bool open_github_url(obs_properties_t *props, obs_property_t *property, void *settings)
-{
-	ShellExecuteW(NULL, L"open", L"https://github.com/lingeriegoat/OBSSpotifyPlugin", NULL, NULL, SW_SHOWNORMAL);
-
 	return true;
 }
 
